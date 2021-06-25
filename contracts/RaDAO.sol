@@ -3,9 +3,9 @@ pragma solidity 0.8.6;
 
 interface IERC20 {
   function balanceOf(address owner) external returns (uint);
-  function approve(address spender, uint256 amount) external returns (bool);
-  function transfer(address recipient, uint256 amount) external returns (bool);
-  function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+  function approve(address spender, uint amount) external returns (bool);
+  function transfer(address recipient, uint amount) external returns (bool);
+  function transferFrom(address sender, address recipient, uint amount) external returns (bool);
 }
 
 interface IVoters {
@@ -21,13 +21,21 @@ contract RaDAO {
         _initialized = true;
     }
 
-    function initialize(string calldata _name, string calldata _symbol, address _wrappedToken, address owner) public {
+    function initialize(
+      string calldata _name, string calldata _symbol, address _wrappedToken, address owner,
+      uint _minBalanceToPropose, uint _minPercentQuorum,
+      uint _minVotingTime, uint _minExecutionDelay
+    ) public {
         require(!_initialized, "init");
         _initialized = true;
         voters = IVoters(address(this));
         name = _name;
         symbol = _symbol;
         wrappedToken = IERC20(_wrappedToken);
+        minBalanceToPropose = _minBalanceToPropose;
+        minPercentQuorum = _minPercentQuorum;
+        minVotingTime = _minVotingTime;
+        minExecutionDelay = _minExecutionDelay;
         if (_wrappedToken == address(0)) {
             totalSupply = 1;
             balanceOf[owner] = 1;
@@ -37,8 +45,8 @@ contract RaDAO {
     // ERC20
     ///////////////////////////////////////////////////////////////////////////
 
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Transfer(address indexed from, address indexed to, uint value);
+    event Approval(address indexed owner, address indexed spender, uint value);
 
     string public name;
     string public symbol;
@@ -49,49 +57,53 @@ contract RaDAO {
     mapping(address => mapping(address => uint)) public allowance;
     mapping(address => uint) public balanceOf;
 
-    function approve(address spender, uint256 amount) external returns (bool) {
+    function burn(address from, uint amount) external {
+        require(msg.sender == address(this), "!dao");
+        _burn(from, amount);
+    }
+
+    function _burn(address from, uint amount) internal {
+        balanceOf[from] = balanceOf[from] - amount;
+        totalSupply = totalSupply - amount;
+        _moveDelegates(from, address(0), uint96(amount));
+        emit Transfer(from, address(0), amount);
+    }
+
+    function mint(address to, uint amount) external {
+        require(msg.sender == address(this), "!dao");
+        _mint(to, amount);
+    }
+
+    function _mint(address to, uint amount) internal {
+        balanceOf[to] = balanceOf[to] + amount;
+        totalSupply = totalSupply + amount;
+        _moveDelegates(address(0), to, uint96(amount));
+        emit Transfer(address(0), to, amount);
+    }
+
+    function approve(address spender, uint amount) external returns (bool) {
         require(spender != address(0), "!zero");
         allowance[msg.sender][spender] = amount;
         emit Approval(msg.sender, spender, amount);
         return true;
     }
 
-    function burn(address from, uint256 amount) external {
-        require(msg.sender == address(this), "!dao");
-        _burn(from, amount);
-    }
-
-    function _burn(address from, uint256 amount) internal {
-        balanceOf[from] = balanceOf[from] - amount;
-        totalSupply = totalSupply - amount;
-        emit Transfer(msg.sender, address(0), amount);
-    }
-
-    function mint(address recipient, uint256 amount) external {
-        require(msg.sender == address(this), "!dao");
-        _mint(recipient, amount);
-    }
-
-    function _mint(address recipient, uint256 amount) internal {
-        balanceOf[recipient] = balanceOf[recipient] + amount;
-        totalSupply = totalSupply + amount;
-        emit Transfer(address(0), recipient, amount);
-    }
-
-    function transfer(address recipient, uint256 amount) external returns (bool) {
+    function transfer(address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
         balanceOf[msg.sender] = balanceOf[msg.sender] - amount;
-        balanceOf[recipient] = balanceOf[recipient] + amount;
-        emit Transfer(msg.sender, recipient, amount);
+        balanceOf[to] = balanceOf[to] + amount;
+        _moveDelegates(msg.sender, to, uint96(amount));
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool) {
+    function transferFrom(address from, address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
-        balanceOf[sender] = balanceOf[sender] - amount;
-        balanceOf[recipient] = balanceOf[recipient] + amount;
-        allowance[sender][msg.sender] = allowance[sender][msg.sender] - amount;
-        emit Transfer(sender, recipient, amount);
+        balanceOf[from] = balanceOf[from] - amount;
+        balanceOf[to] = balanceOf[to] + amount;
+        allowance[from][msg.sender] = allowance[from][msg.sender] - amount;
+        _moveDelegates(from, to, uint96(amount));
+        emit Transfer(from, to, amount);
         return true;
     }
 
@@ -191,10 +203,12 @@ contract RaDAO {
 
     function adjustTotalWrapped(int value) external {
       require(msg.sender == address(this), "!dao");
-      if (value > 0) {
-        totalWrapped += uint(value);
-      } else {
-        totalWrapped -= uint(0 - value);
+      unchecked {
+        if (value > 0) {
+          totalWrapped += uint(value);
+        } else {
+          totalWrapped -= uint(0 - value);
+        }
       }
       require(totalWrapped >= wrappedToken.balanceOf(address(this)), "<balance");
     }
@@ -205,11 +219,11 @@ contract RaDAO {
         uint _totalSupply = totalSupply;
         safeTransferFrom(wrappedToken, msg.sender, address(this), amount);
         if (_totalSupply == 0 || _totalWrapped == 0) {
-            totalWrapped += amount;
+            unchecked { totalWrapped += amount; }
             _mint(msg.sender, amount); // Mint 1:1 when first
         } else {
             uint _value = (amount * _totalSupply) / _totalWrapped;
-            totalWrapped += _value;
+            unchecked { totalWrapped += _value; }
             _mint(msg.sender, _value);
         }
     }
@@ -233,7 +247,7 @@ contract RaDAO {
     }
 
     function _callOptionalReturn(address token, bytes memory data) internal {
-        uint256 size;
+        uint size;
         assembly { size := extcodesize(token) }
         require(size > 0, "!contract");
         (bool success, bytes memory returndata) = address(token).call(data);
@@ -282,43 +296,27 @@ contract RaDAO {
     mapping(uint => mapping(address => uint)) public proposalVotes;
     mapping (address => uint) public latestProposalIds;
 
-    function setVoters(address value) external {
+    function configure(address _voters, address _wrappedToken, uint _minBalanceToPropose, uint _minPercentQuorum, uint _minVotingTime, uint _minExecutionDelay) external {
       require(msg.sender == address(this), "!dao");
-      voters = IVoters(value);
-    }
-
-    function setMinBalanceToPropose(uint value) external {
-      require(msg.sender == address(this), "!dao");
-      minBalanceToPropose = value;
-    }
-
-    function setMinPercentQuorum(uint value) external {
-      require(msg.sender == address(this), "!dao");
-      minPercentQuorum = value;
-    }
-
-    function setMinVotingTime(uint value) external {
-      require(msg.sender == address(this), "!dao");
-      minVotingTime = value;
-    }
-
-    function setMinExecutionDelay(uint value) external {
-      require(msg.sender == address(this), "!dao");
-      minExecutionDelay = value;
+      voters = IVoters(_voters);
+      wrappedToken = IERC20(_wrappedToken);
+      minBalanceToPropose = _minBalanceToPropose;
+      minPercentQuorum = _minPercentQuorum;
+      minVotingTime = _minVotingTime;
+      minExecutionDelay = _minExecutionDelay;
     }
 
     function propose(string calldata title, string calldata description, uint votingTime, uint executionDelay, string[] calldata optionNames, bytes[][] calldata optionActions) external returns (uint) {
-        require(voters.getCurrentVotes(msg.sender) >= minBalanceToPropose, "propose: balance too low");
-        require(optionNames.length == optionActions.length, "propose: options names!=actions");
-        require(optionNames.length > 0, "propose: min 1 option");
-        require(optionNames.length < 100, "propose: max 99 options");
-        require(votingTime >= minVotingTime, "propose: voting time below min");
-        require(executionDelay >= minExecutionDelay, "propose: execution delay below min");
+        require(voters.getCurrentVotes(msg.sender) >= minBalanceToPropose, "<balance");
+        require(optionNames.length == optionActions.length, "option size");
+        require(optionNames.length > 0 && optionNames.length <= 10, "option count");
+        require(votingTime >= minVotingTime, "<voting time");
+        require(executionDelay >= minExecutionDelay, "<exec delay");
 
         // Check the proposing address doesn't have an other active proposal
         uint latestProposalId = latestProposalIds[msg.sender];
         if (latestProposalId != 0) {
-            require(block.timestamp > proposals[latestProposalId].endAt, "propose: 1 live proposal max");
+            require(block.timestamp > proposals[latestProposalId].endAt, "1 live proposal max");
         }
 
         // Add new proposal
@@ -335,12 +333,14 @@ contract RaDAO {
         newProposal.votersSupply = totalSupply;
 
         // Copy options into proposal in storage
-        for (uint i = 0; i < optionNames.length; i++) {
-          newProposal.options.push(Option({
-            name: optionNames[i],
-            actions: optionActions[i],
-            votes: 0
-          }));
+        unchecked {
+            for (uint i = 0; i < optionNames.length; i++) {
+                newProposal.options.push(Option({
+                    name: optionNames[i],
+                    actions: optionActions[i],
+                    votes: 0
+                }));
+            }
         }
 
         // Add the "Against" / "None" option so that the voters always have the option of voting to do nothing
@@ -364,16 +364,18 @@ contract RaDAO {
         bytes32 structHash = keccak256(abi.encode(BALLOT_TYPEHASH, proposalId, optionId));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "voteBySignature: invalid signature");
+        require(signatory != address(0), "invalid signature");
         _vote(signatory, proposalId, optionId);
     }
 
     function _vote(address voter, uint proposalId, uint optionId) internal {
         Proposal memory p = proposals[proposalId];
-        require(block.timestamp < p.endAt, "vote: voting ended");
-        require(proposalVotes[proposalId][voter] == 0, "vote: already voted");
+        require(block.timestamp < p.endAt, "voting ended");
+        require(proposalVotes[proposalId][voter] == 0, "already voted");
         uint votes = voters.getPriorVotes(voter, p.blockNumber);
-        p.options[optionId].votes = p.options[optionId].votes + votes;
+        unchecked {
+          p.options[optionId].votes = p.options[optionId].votes + votes;
+        }
         proposalVotes[proposalId][voter] = optionId;
         emit Voted(proposalId, voter, optionId);
     }
@@ -383,21 +385,23 @@ contract RaDAO {
     // Part of this is establishing which option "won" and if quorum was reached
     function execute(uint proposalId) external {
         Proposal memory p = proposals[proposalId];
-        require(block.timestamp > p.executableAt, "execute: not yet executable");
-        require(p.executedAt == 0, "execute: already executed");
+        require(block.timestamp > p.executableAt, "not yet executable");
+        require(p.executedAt == 0, "already executed");
         p.executedAt = block.timestamp; // Mark as executed now to prevent re-entrancy
 
         // Pick the winning option (the one with the most votes, defaulting to the "Against" (last) option
         uint votesTotal;
         uint winningOptionIndex = p.options.length - 1; // Default to "Against"
         uint winningOptionVotes = 0;
-        for (uint i = p.options.length - 1; i >= 0; i--) {
-            uint votes = p.options[i].votes;
-            votesTotal = votesTotal + votes;
-            // Use greater than (not equal) to avoid a proposal with 0 votes to default to the 1st option
-            if (votes > winningOptionVotes) {
-                winningOptionIndex = i;
-                winningOptionVotes = votes;
+        unchecked {
+            for (uint i = p.options.length - 1; i >= 0; i--) {
+                uint votes = p.options[i].votes;
+                votesTotal = votesTotal + votes;
+                // Use greater than (not equal) to avoid a proposal with 0 votes to default to the 1st option
+                if (votes > winningOptionVotes) {
+                    winningOptionIndex = i;
+                    winningOptionVotes = votes;
+                }
             }
         }
 
@@ -408,7 +412,7 @@ contract RaDAO {
         for (uint i = 0; i < winningOption.actions.length; i++) {
             (address to, uint value, bytes memory data) = abi.decode(winningOption.actions[i], (address, uint, bytes));
             (bool success,) = to.call{value: value}(data);
-            require(success, "execute: action reverted");
+            require(success, "action reverted");
             emit Executed(to, value, data);
         }
 
