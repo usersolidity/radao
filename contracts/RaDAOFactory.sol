@@ -18,9 +18,13 @@ contract RaDAOFactory {
       uint minVotingTime, uint minExecutionDelay
     ) external returns (address) {
         RaDAO dao = RaDAO(createClone(masterContract));
-        dao.initialize(
-            name, symbol, wrappedToken, msg.sender,
-            minBalanceToPropose, minPercentQuorum, minVotingTime, minExecutionDelay
+        dao.snapshot();
+        if (wrappedToken == address(0)) {
+          dao.mint(msg.sender, 1);
+        }
+        dao.configure(
+          name, symbol, address(dao), wrappedToken,
+          minBalanceToPropose, minPercentQuorum, minVotingTime, minExecutionDelay
         );
         emit Created(address(dao));
         return address(dao);

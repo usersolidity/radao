@@ -11,7 +11,7 @@ interface IERC20 {
 interface IVoters {
     function snapshot() external returns (uint);
     function totalSupplyAt(uint snapshotId) external view returns (uint);
-    function balanceOfAt(address account, uint snapshotId) external view returns (uint);
+    function votesAt(address account, uint snapshotId) external view returns (uint);
 }
 
 contract RaDAO {
@@ -19,30 +19,6 @@ contract RaDAO {
 
     constructor() {
         _initialized = true;
-    }
-
-    function initialize(
-      string calldata _name, string calldata _symbol, address _wrappedToken, address owner,
-      uint _minBalanceToPropose, uint _minPercentQuorum,
-      uint _minVotingTime, uint _minExecutionDelay
-    ) public {
-        require(!_initialized, "init");
-        _initialized = true;
-        voters = IVoters(address(this));
-        name = _name;
-        symbol = _symbol;
-        wrappedToken = IERC20(_wrappedToken);
-        minBalanceToPropose = _minBalanceToPropose;
-        minPercentQuorum = _minPercentQuorum;
-        minVotingTime = _minVotingTime;
-        minExecutionDelay = _minExecutionDelay;
-        _snapshot();
-        if (_wrappedToken == address(0)) {
-            _updateSnapshot(_totalSupplySnapshots, 1);
-            _updateSnapshot(_balancesSnapshots[owner], 1);
-            _updateSnapshot(_votesSnapshots[owner], 1);
-            delegates[owner] = owner;
-        }
     }
 
     // ERC20 & Voting Power & Delegation
@@ -91,7 +67,7 @@ contract RaDAO {
     }
 
     function mint(address to, uint amount) external {
-        require(msg.sender == address(this), "!dao");
+        require(msg.sender == address(this) || !_initialized, "!dao");
         _mint(to, amount);
     }
 
@@ -134,6 +110,11 @@ contract RaDAO {
         return true;
     }
 
+    function snapshot() external returns (uint) {
+        require(msg.sender == address(this) || !_initialized, "!dao");
+        return _snapshot();
+    }
+
     function _snapshot() private returns (uint) {
         unchecked { _currentSnapshotId += 1; }
         emit Snapshot(_currentSnapshotId);
@@ -144,8 +125,8 @@ contract RaDAO {
         return _valueAt(_totalSupplySnapshots, snapshotId);
     }
 
-    function balanceOfAt(uint snapshotId, address account) public view returns (uint) {
-        return _valueAt(_balancesSnapshots[account], snapshotId);
+    function votesAt(uint snapshotId, address account) public view returns (uint) {
+        return _valueAt(_votesSnapshots[account], snapshotId);
     }
 
     function _valueAt(Snapshots storage snapshots, uint snapshotId) private view returns (uint) {
@@ -202,14 +183,14 @@ contract RaDAO {
     ///////////////////////////////////////////////////////////////////////////
 
     function adjustTotalWrapped(int value) external {
-      require(msg.sender == address(this), "!dao");
-      unchecked {
-        if (value > 0) {
-          totalWrapped += uint(value);
-        } else {
-          totalWrapped -= uint(0 - value);
+        require(msg.sender == address(this), "!dao");
+        unchecked {
+            if (value > 0) {
+                totalWrapped += uint(value);
+            } else {
+                totalWrapped -= uint(0 - value);
+            }
         }
-      }
     }
 
     function lock(uint amount) external {
@@ -295,14 +276,22 @@ contract RaDAO {
     mapping(uint => mapping(address => uint)) public proposalVotes;
     mapping (address => uint) public latestProposalIds;
 
-    function configure(address _voters, address _wrappedToken, uint _minBalanceToPropose, uint _minPercentQuorum, uint _minVotingTime, uint _minExecutionDelay) external {
-      require(msg.sender == address(this), "!dao");
-      voters = IVoters(_voters);
-      wrappedToken = IERC20(_wrappedToken);
-      minBalanceToPropose = _minBalanceToPropose;
-      minPercentQuorum = _minPercentQuorum;
-      minVotingTime = _minVotingTime;
-      minExecutionDelay = _minExecutionDelay;
+    function configure(
+      string calldata _name, string calldata _symbol, address _voters, address _wrappedToken,
+      uint _minBalanceToPropose, uint _minPercentQuorum, uint _minVotingTime, uint _minExecutionDelay
+    ) external {
+        require(msg.sender == address(this) || !_initialized, "!dao");
+        name = _name;
+        symbol = _symbol;
+        voters = IVoters(_voters);
+        wrappedToken = IERC20(_wrappedToken);
+        minBalanceToPropose = _minBalanceToPropose;
+        minPercentQuorum = _minPercentQuorum;
+        minVotingTime = _minVotingTime;
+        minExecutionDelay = _minExecutionDelay;
+        if (!_initialized) {
+            _initialized = true;
+        }
     }
 
     function propose(string calldata title, string calldata description, uint votingTime, uint executionDelay, string[] calldata optionNames, bytes[][] calldata optionActions) external returns (uint) {
@@ -312,7 +301,7 @@ contract RaDAO {
         } else {
           snapshotId = voters.snapshot();
         }
-        require(voters.balanceOfAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
+        require(voters.votesAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
         require(optionNames.length == optionActions.length, "option size");
         require(optionNames.length > 0 && optionNames.length <= 100, "option count");
         require(votingTime >= minVotingTime, "<voting time");
@@ -378,9 +367,8 @@ contract RaDAO {
         Proposal memory p = proposals[proposalId];
         require(block.timestamp < p.endAt, "voting ended");
         require(proposalVotes[proposalId][voter] == 0, "already voted");
-        uint votes = voters.balanceOfAt(voter, p.snapshotId);
         unchecked {
-          p.options[optionId].votes = p.options[optionId].votes + votes;
+          p.options[optionId].votes = p.options[optionId].votes + voters.votesAt(voter, p.snapshotId);
         }
         proposalVotes[proposalId][voter] = optionId;
         emit Voted(proposalId, voter, optionId);
