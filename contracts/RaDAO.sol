@@ -36,9 +36,12 @@ contract RaDAO {
         minPercentQuorum = _minPercentQuorum;
         minVotingTime = _minVotingTime;
         minExecutionDelay = _minExecutionDelay;
+        _snapshot();
         if (_wrappedToken == address(0)) {
             _updateSnapshot(_totalSupplySnapshots, 1);
             _updateSnapshot(_balancesSnapshots[owner], 1);
+            _updateSnapshot(_votesSnapshots[owner], 1);
+            delegates[owner] = owner;
         }
     }
 
@@ -53,8 +56,7 @@ contract RaDAO {
     event Transfer(address indexed from, address indexed to, uint value);
     event Approval(address indexed owner, address indexed spender, uint value);
     event Snapshot(uint id);
-    // event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
-    // event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
+    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
 
     string public name;
     string public symbol;
@@ -65,8 +67,8 @@ contract RaDAO {
     uint private _currentSnapshotId;
     Snapshots private _totalSupplySnapshots;
     mapping(address => Snapshots) private _balancesSnapshots;
-    // mapping(address => address) public delegates;
-    // mapping(address => Snapshots) private _votesSnapshots;
+    mapping(address => address) public delegates;
+    mapping(address => Snapshots) private _votesSnapshots;
 
     function totalSupply() public view returns (uint) {
       return _valueAt(_totalSupplySnapshots, _currentSnapshotId);
@@ -82,8 +84,9 @@ contract RaDAO {
     }
 
     function _burn(address from, uint amount) private {
-        _updateSnapshot(_balancesSnapshots[from], _valueAt(_balancesSnapshots[from], _currentSnapshotId) - amount);
-        _updateSnapshot(_totalSupplySnapshots, _valueAt(_totalSupplySnapshots, _currentSnapshotId) - amount);
+        _updateSnapshot(_balancesSnapshots[from], 0 - int(amount));
+        _updateSnapshot(_totalSupplySnapshots, 0 - int(amount));
+        _updateSnapshot(_votesSnapshots[delegates[from]], 0 - int(amount));
         emit Transfer(from, address(0), amount);
     }
 
@@ -93,8 +96,9 @@ contract RaDAO {
     }
 
     function _mint(address to, uint amount) private {
-        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
-        _updateSnapshot(_totalSupplySnapshots, _valueAt(_totalSupplySnapshots, _currentSnapshotId) + amount);
+        _updateSnapshot(_balancesSnapshots[to], int(amount));
+        _updateSnapshot(_totalSupplySnapshots, int(amount));
+        _updateSnapshot(_votesSnapshots[delegates[to]], int(amount));
         emit Transfer(address(0), to, amount);
     }
 
@@ -107,8 +111,12 @@ contract RaDAO {
 
     function transfer(address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
-        _updateSnapshot(_balancesSnapshots[msg.sender], _valueAt(_balancesSnapshots[msg.sender], _currentSnapshotId) - amount);
-        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
+        unchecked {
+            _updateSnapshot(_balancesSnapshots[msg.sender], 0 - int(amount));
+            _updateSnapshot(_balancesSnapshots[to], int(amount));
+            _updateSnapshot(_votesSnapshots[delegates[msg.sender]], 0 - int(amount));
+            _updateSnapshot(_votesSnapshots[delegates[to]], int(amount));
+        }
         emit Transfer(msg.sender, to, amount);
         return true;
     }
@@ -116,8 +124,12 @@ contract RaDAO {
     function transferFrom(address from, address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
         allowance[from][msg.sender] = allowance[from][msg.sender] - amount;
-        _updateSnapshot(_balancesSnapshots[from], _valueAt(_balancesSnapshots[from], _currentSnapshotId) - amount);
-        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
+        unchecked {
+            _updateSnapshot(_balancesSnapshots[from], 0 - int(amount));
+            _updateSnapshot(_balancesSnapshots[to], int(amount));
+            _updateSnapshot(_votesSnapshots[delegates[from]], 0 - int(amount));
+            _updateSnapshot(_votesSnapshots[delegates[to]], int(amount));
+        }
         emit Transfer(from, to, amount);
         return true;
     }
@@ -139,72 +151,52 @@ contract RaDAO {
     function _valueAt(Snapshots storage snapshots, uint snapshotId) private view returns (uint) {
         uint lower = 0;
         uint upper = snapshots.ids.length;
-        while (upper > lower) {
-            uint center = upper - (upper - lower) / 2;
-            uint id = snapshots.ids[center];
-            if (id == snapshotId) {
-              return snapshots.values[center];
-            } else if (id < snapshotId){
-              lower = center;
-            } else {
-              upper = center - 1;
+        unchecked {
+            while (upper > lower) {
+                uint center = upper - (upper - lower) / 2;
+                uint id = snapshots.ids[center];
+                if (id == snapshotId) {
+                  return snapshots.values[center];
+                } else if (id < snapshotId){
+                  lower = center;
+                } else {
+                  upper = center - 1;
+                }
             }
         }
-        return snapshots.values[lower];
+        if (lower < snapshots.values.length) {
+          return snapshots.values[lower];
+        }
+        return 0;
     }
 
-    function _updateSnapshot(Snapshots storage snapshots, uint currentValue) private {
+    function _updateSnapshot(Snapshots storage snapshots, int change) private {
+        uint newValue = uint(int(_valueAt(snapshots, _currentSnapshotId)) + change);
         uint currentId = _currentSnapshotId;
         uint lastSnapshotId = 0;
         if (snapshots.ids.length > 0) {
-            lastSnapshotId = snapshots.ids[snapshots.ids.length - 1];
+            unchecked {
+                lastSnapshotId = snapshots.ids[snapshots.ids.length - 1];
+            }
         }
         if (lastSnapshotId < currentId) {
             snapshots.ids.push(currentId);
-            snapshots.values.push(currentValue);
-        }
-    }
-
-    /*
-    function delegate(address delegatee) external {
-        _delegate(msg.sender, delegatee);
-    }
-
-    function _delegate(address delegator, address delegatee) private {
-        address currentDelegate = delegates[delegator];
-        delegates[delegator] = delegatee;
-        emit DelegateChanged(delegator, currentDelegate, delegatee);
-        _moveDelegates(currentDelegate, delegatee, uint96(balanceOf[delegator]));
-    }
-
-    function _moveDelegates(address srcRep, address dstRep, uint96 amount) private {
-        if (srcRep != dstRep && amount > 0) {
-            if (srcRep != address(0)) {
-                uint32 srcRepNum = numCheckpoints[srcRep];
-                uint96 srcRepOld = srcRepNum > 0 ? checkpoints[srcRep][srcRepNum - 1].votes : 0;
-                uint96 srcRepNew = srcRepOld - amount;
-                _writeCheckpoint(srcRep, srcRepNum, srcRepOld, srcRepNew);
-            }
-            if (dstRep != address(0)) {
-                uint32 dstRepNum = numCheckpoints[dstRep];
-                uint96 dstRepOld = dstRepNum > 0 ? checkpoints[dstRep][dstRepNum - 1].votes : 0;
-                uint96 dstRepNew = dstRepOld + amount;
-                _writeCheckpoint(dstRep, dstRepNum, dstRepOld, dstRepNew);
-            }
-        }
-    }
-
-    function _writeCheckpoint(address delegatee, uint32 nCheckpoints, uint96 oldVotes, uint96 newVotes) private {
-        uint32 blockNumber = uint32(block.number);
-        if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1].fromBlock == blockNumber) {
-          checkpoints[delegatee][nCheckpoints - 1].votes = newVotes;
+            snapshots.values.push(newValue);
         } else {
-          checkpoints[delegatee][nCheckpoints] = Checkpoint(blockNumber, newVotes);
-          numCheckpoints[delegatee] = nCheckpoints + 1;
+            unchecked {
+                snapshots.values[snapshots.values.length - 1] = newValue;
+            }
         }
-        emit DelegateVotesChanged(delegatee, oldVotes, newVotes);
     }
-    */
+
+    function delegate(address delegatee) external {
+        address currentDelegate = delegates[msg.sender];
+        delegates[msg.sender] = delegatee;
+        uint amount = _valueAt(_balancesSnapshots[msg.sender], _currentSnapshotId);
+        _updateSnapshot(_votesSnapshots[currentDelegate], 0 - int(amount));
+        _updateSnapshot(_votesSnapshots[delegatee],  int(amount));
+        emit DelegateChanged(msg.sender, currentDelegate, delegatee);
+    }
 
     // Lock / Unlock
     ///////////////////////////////////////////////////////////////////////////
@@ -423,11 +415,13 @@ contract RaDAO {
 
         // Run all actions attached to the winning option
         Option memory winningOption = p.options[winningOptionIndex];
-        for (uint i = 0; i < winningOption.actions.length; i++) {
-            (address to, uint value, bytes memory data) = abi.decode(winningOption.actions[i], (address, uint, bytes));
-            (bool success,) = to.call{value: value}(data);
-            require(success, "action reverted");
-            emit Executed(to, value, data);
+        unchecked {
+          for (uint i = 0; i < winningOption.actions.length; i++) {
+              (address to, uint value, bytes memory data) = abi.decode(winningOption.actions[i], (address, uint, bytes));
+              (bool success,) = to.call{value: value}(data);
+              require(success, "action reverted");
+              emit Executed(to, value, data);
+          }
         }
 
         emit ExecutedProposal(proposalId, msg.sender);
