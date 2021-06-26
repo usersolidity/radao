@@ -37,25 +37,44 @@ contract RaDAO {
         minVotingTime = _minVotingTime;
         minExecutionDelay = _minExecutionDelay;
         if (_wrappedToken == address(0)) {
-            totalSupply = 1;
-            balanceOf[owner] = 1;
+            _updateSnapshot(_totalSupplySnapshots, 1);
+            _updateSnapshot(_balancesSnapshots[owner], 1);
         }
     }
 
-    // ERC20
+    // ERC20 & Voting Power & Delegation
     ///////////////////////////////////////////////////////////////////////////
+
+    struct Snapshots {
+        uint[] ids;
+        uint[] values;
+    }
 
     event Transfer(address indexed from, address indexed to, uint value);
     event Approval(address indexed owner, address indexed spender, uint value);
+    event Snapshot(uint id);
+    // event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
+    // event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
 
     string public name;
     string public symbol;
     uint8 public constant decimals = 18;
     IERC20 public wrappedToken;
-    uint public totalSupply;
     uint public totalWrapped;
     mapping(address => mapping(address => uint)) public allowance;
-    mapping(address => uint) public balanceOf;
+    uint private _currentSnapshotId;
+    Snapshots private _totalSupplySnapshots;
+    mapping(address => Snapshots) private _balancesSnapshots;
+    // mapping(address => address) public delegates;
+    // mapping(address => Snapshots) private _votesSnapshots;
+
+    function totalSupply() public view returns (uint) {
+      return _valueAt(_totalSupplySnapshots, _currentSnapshotId);
+    }
+
+    function balanceOf(address owner) external view returns (uint) {
+      return _valueAt(_balancesSnapshots[owner], _currentSnapshotId);
+    }
 
     function burn(address from, uint amount) external {
         require(msg.sender == address(this), "!dao");
@@ -63,10 +82,8 @@ contract RaDAO {
     }
 
     function _burn(address from, uint amount) private {
-        balanceOf[from] = balanceOf[from] - amount;
-        totalSupply = totalSupply - amount;
-        _updateSnapshot(_balancesSnapshots[from], balanceOf[from]);
-        _updateSnapshot(_totalSupplySnapshots, totalSupply);
+        _updateSnapshot(_balancesSnapshots[from], _valueAt(_balancesSnapshots[from], _currentSnapshotId) - amount);
+        _updateSnapshot(_totalSupplySnapshots, _valueAt(_totalSupplySnapshots, _currentSnapshotId) - amount);
         emit Transfer(from, address(0), amount);
     }
 
@@ -76,10 +93,8 @@ contract RaDAO {
     }
 
     function _mint(address to, uint amount) private {
-        balanceOf[to] = balanceOf[to] + amount;
-        totalSupply = totalSupply + amount;
-        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
-        _updateSnapshot(_totalSupplySnapshots, totalSupply);
+        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
+        _updateSnapshot(_totalSupplySnapshots, _valueAt(_totalSupplySnapshots, _currentSnapshotId) + amount);
         emit Transfer(address(0), to, amount);
     }
 
@@ -92,46 +107,20 @@ contract RaDAO {
 
     function transfer(address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
-        balanceOf[msg.sender] = balanceOf[msg.sender] - amount;
-        balanceOf[to] = balanceOf[to] + amount;
-        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
-        _updateSnapshot(_balancesSnapshots[msg.sender], balanceOf[msg.sender]);
+        _updateSnapshot(_balancesSnapshots[msg.sender], _valueAt(_balancesSnapshots[msg.sender], _currentSnapshotId) - amount);
+        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
         emit Transfer(msg.sender, to, amount);
         return true;
     }
 
     function transferFrom(address from, address to, uint amount) external returns (bool) {
         require(address(wrappedToken) != address(0), "!wrapped");
-        balanceOf[from] = balanceOf[from] - amount;
-        balanceOf[to] = balanceOf[to] + amount;
         allowance[from][msg.sender] = allowance[from][msg.sender] - amount;
-        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
-        _updateSnapshot(_balancesSnapshots[from], balanceOf[from]);
+        _updateSnapshot(_balancesSnapshots[from], _valueAt(_balancesSnapshots[from], _currentSnapshotId) - amount);
+        _updateSnapshot(_balancesSnapshots[to], _valueAt(_balancesSnapshots[to], _currentSnapshotId) + amount);
         emit Transfer(from, to, amount);
         return true;
     }
-
-    // Voting power & delegation
-    ///////////////////////////////////////////////////////////////////////////
-
-    struct Snapshots {
-        uint[] ids;
-        uint[] values;
-    }
-
-    event Snapshot(uint id);
-    /*
-    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
-    event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
-    */
-
-    uint private _currentSnapshotId;
-    Snapshots private _totalSupplySnapshots;
-    mapping(address => Snapshots) private _balancesSnapshots;
-    /*
-    mapping(address => address) public delegates;
-    mapping(address => Snapshots) private _votesSnapshots;
-    */
 
     function _snapshot() private returns (uint) {
         unchecked { _currentSnapshotId += 1; }
@@ -234,7 +223,7 @@ contract RaDAO {
     function lock(uint amount) external {
         require(address(wrappedToken) != address(0), "!wrapped");
         uint _totalWrapped = totalWrapped;
-        uint _totalSupply = totalSupply;
+        uint _totalSupply = totalSupply();
         safeTransferFrom(wrappedToken, msg.sender, address(this), amount);
         if (_totalSupply == 0 || _totalWrapped == 0) {
             unchecked { totalWrapped += amount; }
@@ -249,7 +238,7 @@ contract RaDAO {
     function unlock(uint amount) external {
         require(address(wrappedToken) != address(0), "!wrapped");
         uint _totalWrapped = totalWrapped;
-        uint _totalSupply = totalSupply;
+        uint _totalSupply = totalSupply();
         _burn(msg.sender, amount);
         uint _value = (amount * _totalWrapped) / _totalSupply;
         totalWrapped -= _value;
@@ -333,7 +322,7 @@ contract RaDAO {
         }
         require(voters.balanceOfAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
         require(optionNames.length == optionActions.length, "option size");
-        require(optionNames.length > 0 && optionNames.length <= 10, "option count");
+        require(optionNames.length > 0 && optionNames.length <= 100, "option count");
         require(votingTime >= minVotingTime, "<voting time");
         require(executionDelay >= minExecutionDelay, "<exec delay");
 
@@ -359,6 +348,7 @@ contract RaDAO {
         // Copy options into proposal in storage
         unchecked {
             for (uint i = 0; i < optionNames.length; i++) {
+                require(optionActions[i].length <= 10, "actions length > 10");
                 newProposal.options.push(Option({
                     name: optionNames[i],
                     actions: optionActions[i],
