@@ -14,7 +14,7 @@ async function main() {
     await factory.create(
       "K DAO Voting Token",
       "KDAO",
-      "0x",
+      "",
       0,
       500000000000,
       15,

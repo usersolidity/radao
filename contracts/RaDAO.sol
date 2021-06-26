@@ -9,9 +9,9 @@ interface IERC20 {
 }
 
 interface IVoters {
-    function getCurrentTotalVotes() external view returns (uint);
-    function getCurrentVotes(address account) external view returns (uint96);
-    function getPriorVotes(address account, uint blockNumber) external view returns (uint96);
+    function snapshot() external returns (uint);
+    function totalSupplyAt(uint snapshotId) external view returns (uint);
+    function balanceOfAt(address account, uint snapshotId) external view returns (uint);
 }
 
 contract RaDAO {
@@ -62,10 +62,11 @@ contract RaDAO {
         _burn(from, amount);
     }
 
-    function _burn(address from, uint amount) internal {
+    function _burn(address from, uint amount) private {
         balanceOf[from] = balanceOf[from] - amount;
         totalSupply = totalSupply - amount;
-        _moveDelegates(from, address(0), uint96(amount));
+        _updateSnapshot(_balancesSnapshots[from], balanceOf[from]);
+        _updateSnapshot(_totalSupplySnapshots, totalSupply);
         emit Transfer(from, address(0), amount);
     }
 
@@ -74,10 +75,11 @@ contract RaDAO {
         _mint(to, amount);
     }
 
-    function _mint(address to, uint amount) internal {
+    function _mint(address to, uint amount) private {
         balanceOf[to] = balanceOf[to] + amount;
         totalSupply = totalSupply + amount;
-        _moveDelegates(address(0), to, uint96(amount));
+        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
+        _updateSnapshot(_totalSupplySnapshots, totalSupply);
         emit Transfer(address(0), to, amount);
     }
 
@@ -92,7 +94,8 @@ contract RaDAO {
         require(address(wrappedToken) != address(0), "!wrapped");
         balanceOf[msg.sender] = balanceOf[msg.sender] - amount;
         balanceOf[to] = balanceOf[to] + amount;
-        _moveDelegates(msg.sender, to, uint96(amount));
+        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
+        _updateSnapshot(_balancesSnapshots[msg.sender], balanceOf[msg.sender]);
         emit Transfer(msg.sender, to, amount);
         return true;
     }
@@ -102,7 +105,8 @@ contract RaDAO {
         balanceOf[from] = balanceOf[from] - amount;
         balanceOf[to] = balanceOf[to] + amount;
         allowance[from][msg.sender] = allowance[from][msg.sender] - amount;
-        _moveDelegates(from, to, uint96(amount));
+        _updateSnapshot(_balancesSnapshots[to], balanceOf[to]);
+        _updateSnapshot(_balancesSnapshots[from], balanceOf[from]);
         emit Transfer(from, to, amount);
         return true;
     }
@@ -110,55 +114,69 @@ contract RaDAO {
     // Voting power & delegation
     ///////////////////////////////////////////////////////////////////////////
 
-    struct Checkpoint {
-        uint32 fromBlock;
-        uint96 votes;
+    struct Snapshots {
+        uint[] ids;
+        uint[] values;
     }
 
+    event Snapshot(uint id);
+    /*
     event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
     event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
+    */
 
+    uint private _currentSnapshotId;
+    Snapshots private _totalSupplySnapshots;
+    mapping(address => Snapshots) private _balancesSnapshots;
+    /*
     mapping(address => address) public delegates;
-    mapping(address => uint32) public numCheckpoints;
-    mapping(address => mapping(uint32 => Checkpoint)) public checkpoints;
+    mapping(address => Snapshots) private _votesSnapshots;
+    */
 
-    function getCurrentTotalVotes() external view returns (uint) {
-      return totalSupply;
+    function _snapshot() private returns (uint) {
+        unchecked { _currentSnapshotId += 1; }
+        emit Snapshot(_currentSnapshotId);
+        return _currentSnapshotId;
     }
 
-    function getCurrentVotes(address account) external view returns (uint96) {
-        uint32 nCheckpoints = numCheckpoints[account];
-        return nCheckpoints > 0 ? checkpoints[account][nCheckpoints - 1].votes : 0;
+    function totalSupplyAt(uint snapshotId) public view returns (uint) {
+        return _valueAt(_totalSupplySnapshots, snapshotId);
     }
 
-    function getPriorVotes(address account, uint blockNumber) external view returns (uint96) {
-        require(blockNumber < block.number, "<block");
-        uint32 nCheckpoints = numCheckpoints[account];
-        if (nCheckpoints == 0) {
-          return 0;
-        }
-        if (checkpoints[account][nCheckpoints - 1].fromBlock <= blockNumber) {
-          return checkpoints[account][nCheckpoints - 1].votes;
-        }
-        if (checkpoints[account][0].fromBlock > blockNumber){
-          return 0;
-        }
-        uint32 lower = 0;
-        uint32 upper = nCheckpoints - 1;
+    function balanceOfAt(uint snapshotId, address account) public view returns (uint) {
+        return _valueAt(_balancesSnapshots[account], snapshotId);
+    }
+
+    function _valueAt(Snapshots storage snapshots, uint snapshotId) private view returns (uint) {
+        uint lower = 0;
+        uint upper = snapshots.ids.length;
         while (upper > lower) {
-            uint32 center = upper - (upper - lower) / 2;
-            Checkpoint memory cp = checkpoints[account][center];
-            if (cp.fromBlock == blockNumber) {
-              return cp.votes;
-            } else if (cp.fromBlock < blockNumber){
+            uint center = upper - (upper - lower) / 2;
+            uint id = snapshots.ids[center];
+            if (id == snapshotId) {
+              return snapshots.values[center];
+            } else if (id < snapshotId){
               lower = center;
             } else {
               upper = center - 1;
             }
         }
-        return checkpoints[account][lower].votes;
+        return snapshots.values[lower];
     }
 
+    function _updateSnapshot(Snapshots storage snapshots, uint currentValue) private {
+        uint currentId = _currentSnapshotId;
+        uint lastSnapshotId = 0;
+        if (snapshots.ids.length > 0) {
+            lastSnapshotId = snapshots.ids[snapshots.ids.length - 1];
+        }
+        if (lastSnapshotId < currentId) {
+            snapshots.ids.push(currentId);
+            snapshots.values.push(currentValue);
+        }
+    }
+
+    /*
     function delegate(address delegatee) external {
         _delegate(msg.sender, delegatee);
     }
@@ -197,6 +215,7 @@ contract RaDAO {
         }
         emit DelegateVotesChanged(delegatee, oldVotes, newVotes);
     }
+    */
 
     // Lock / Unlock
     ///////////////////////////////////////////////////////////////////////////
@@ -210,7 +229,6 @@ contract RaDAO {
           totalWrapped -= uint(0 - value);
         }
       }
-      require(totalWrapped >= wrappedToken.balanceOf(address(this)), "<balance");
     }
 
     function lock(uint amount) external {
@@ -238,15 +256,15 @@ contract RaDAO {
         safeTransfer(wrappedToken, msg.sender, _value);
     }
 
-    function safeTransfer(IERC20 token, address to, uint value) internal {
+    function safeTransfer(IERC20 token, address to, uint value) private {
       _callOptionalReturn(address(token), abi.encodeWithSelector(token.transfer.selector, to, value));
     }
 
-    function safeTransferFrom(IERC20 token, address from, address to, uint value) internal {
+    function safeTransferFrom(IERC20 token, address from, address to, uint value) private {
       _callOptionalReturn(address(token), abi.encodeWithSelector(token.transferFrom.selector, from, to, value));
     }
 
-    function _callOptionalReturn(address token, bytes memory data) internal {
+    function _callOptionalReturn(address token, bytes memory data) private {
         uint size;
         assembly { size := extcodesize(token) }
         require(size > 0, "!contract");
@@ -270,7 +288,7 @@ contract RaDAO {
         uint endAt;
         uint executableAt;
         uint executedAt;
-        uint blockNumber;
+        uint snapshotId;
         uint votersSupply;
     }
     struct Option {
@@ -307,7 +325,13 @@ contract RaDAO {
     }
 
     function propose(string calldata title, string calldata description, uint votingTime, uint executionDelay, string[] calldata optionNames, bytes[][] calldata optionActions) external returns (uint) {
-        require(voters.getCurrentVotes(msg.sender) >= minBalanceToPropose, "<balance");
+        uint snapshotId;
+        if (address(voters) == address(this)) {
+          snapshotId = _snapshot();
+        } else {
+          snapshotId = voters.snapshot();
+        }
+        require(voters.balanceOfAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
         require(optionNames.length == optionActions.length, "option size");
         require(optionNames.length > 0 && optionNames.length <= 10, "option count");
         require(votingTime >= minVotingTime, "<voting time");
@@ -329,8 +353,8 @@ contract RaDAO {
         newProposal.startAt = block.timestamp;
         newProposal.endAt = block.timestamp + votingTime;
         newProposal.executableAt = block.timestamp + votingTime + executionDelay;
-        newProposal.blockNumber = block.number;
-        newProposal.votersSupply = totalSupply;
+        newProposal.snapshotId = snapshotId;
+        newProposal.votersSupply = voters.totalSupplyAt(snapshotId);
 
         // Copy options into proposal in storage
         unchecked {
@@ -368,11 +392,11 @@ contract RaDAO {
         _vote(signatory, proposalId, optionId);
     }
 
-    function _vote(address voter, uint proposalId, uint optionId) internal {
+    function _vote(address voter, uint proposalId, uint optionId) private {
         Proposal memory p = proposals[proposalId];
         require(block.timestamp < p.endAt, "voting ended");
         require(proposalVotes[proposalId][voter] == 0, "already voted");
-        uint votes = voters.getPriorVotes(voter, p.blockNumber);
+        uint votes = voters.balanceOfAt(voter, p.snapshotId);
         unchecked {
           p.options[optionId].votes = p.options[optionId].votes + votes;
         }
