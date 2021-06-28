@@ -9,16 +9,17 @@ async function main() {
   const Factory = await hre.ethers.getContractFactory("RaDAOFactory");
   const factory = await Factory.deploy(contract.address);
   await factory.deployed();
+  console.log("RaDAOFactory deployed to:", factory.address);
 
   const tx = await (
     await factory.create(
-      "K DAO Voting Token",
-      "KDAO",
+      "Z DAO Voting Token",
+      "ZDAO",
       "0x0000000000000000000000000000000000000000",
       0,
       500000000000,
-      15,
-      15
+      240,
+      60
     )
   ).wait();
   const daoAddress = tx.events[tx.events.length - 1].args[0];
