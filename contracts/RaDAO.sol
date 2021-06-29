@@ -273,7 +273,7 @@ contract RaDAO {
     uint public minExecutionDelay;
     IVoters voters;
     uint public proposalsCount;
-    mapping(uint => Proposal) public proposals;
+    mapping(uint => Proposal) private proposals;
     mapping(uint => mapping(address => uint)) public proposalVotes;
     mapping (address => uint) private latestProposalIds;
 
@@ -295,6 +295,29 @@ contract RaDAO {
         }
     }
 
+    function proposal(uint index) public view returns (uint, address, string memory, uint, uint, uint, uint) {
+        return (
+          proposals[index].id,
+          proposals[index].proposer,
+          proposals[index].title,
+          proposals[index].startAt,
+          proposals[index].endAt,
+          proposals[index].executableAt,
+          proposals[index].executedAt
+        );
+    }
+
+    function proposalDetails(uint index) public view returns (string memory, uint, uint, string[] memory, bytes[][] memory, uint[] memory) {
+        return (
+          proposals[index].description,
+          proposals[index].snapshotId,
+          proposals[index].votersSupply,
+          proposals[index].optionsNames,
+          proposals[index].optionsActions,
+          proposals[index].optionsVotes
+        );
+    }
+
     function propose(string calldata title, string calldata description, uint votingTime, uint executionDelay, string[] calldata optionNames, bytes[][] memory optionActions) external returns (uint) {
         uint snapshotId;
         if (address(voters) == address(this)) {
@@ -305,6 +328,7 @@ contract RaDAO {
         require(voters.votesAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
         require(optionNames.length == optionActions.length, "option size");
         require(optionNames.length > 0 && optionNames.length <= 100, "option count");
+        require(optionActions[optionActions.length - 1].length == 0, "last option, no action");
         require(votingTime >= minVotingTime, "<voting time");
         require(executionDelay >= minExecutionDelay, "<exec delay");
 
@@ -340,32 +364,24 @@ contract RaDAO {
 
         // Add the "Against" / "None" option so that the voters always have the option of voting to do nothing
         // Without this a proposer could submit 2 malicious options and one or the other would be guaranteed to execute
-        newProposal.optionsNames.push(AGAINST_OPTION_NAME);
-        newProposal.optionsActions.push(new bytes[](0));
-        newProposal.optionsVotes.push(0);
 
         latestProposalIds[msg.sender] = newProposal.id;
         emit Proposed(newProposal.id);
         return newProposal.id;
     }
 
-    function vote(uint proposalId, uint optionId) external {
-        _vote(msg.sender, proposalId, optionId);
-    }
-
-    function voteBySignature(uint proposalId, uint optionId, uint8 v, bytes32 r, bytes32 s) external {
-        uint chainId;
-        assembly { chainId := chainid() }
-        bytes32 domainSeparator = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name)), chainId, address(this)));
-        bytes32 structHash = keccak256(abi.encode(BALLOT_TYPEHASH, proposalId, optionId));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "invalid signature");
-        _vote(signatory, proposalId, optionId);
-    }
-
-    function _vote(address voter, uint proposalId, uint optionId) private {
-        Proposal memory p = proposals[proposalId];
+    function vote(uint proposalId, uint optionId, uint8 v, bytes32 r, bytes32 s) external {
+        address voter = msg.sender;
+        if (r != 0x00000000000000000000000000000000) {
+          uint chainId;
+          assembly { chainId := chainid() }
+          bytes32 domainSeparator = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name)), chainId, address(this)));
+          bytes32 structHash = keccak256(abi.encode(BALLOT_TYPEHASH, proposalId, optionId));
+          bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+          voter = ecrecover(digest, v, r, s);
+          require(voter != address(0), "invalid signature");
+        }
+        Proposal storage p = proposals[proposalId];
         require(block.timestamp < p.endAt, "voting ended");
         require(proposalVotes[proposalId][voter] == 0, "already voted");
         unchecked {
@@ -379,7 +395,7 @@ contract RaDAO {
     // If the pre-conditions are met, anybody can call this
     // Part of this is establishing which option "won" and if quorum was reached
     function execute(uint proposalId) external {
-        Proposal memory p = proposals[proposalId];
+        Proposal storage p = proposals[proposalId];
         require(block.timestamp > p.executableAt, "not yet executable");
         require(p.executedAt == 0, "already executed");
         p.executedAt = block.timestamp; // Mark as executed now to prevent re-entrancy
