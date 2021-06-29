@@ -2,6 +2,7 @@
   const styles = `
   :root {
     --ra-color: #000000;
+    --ra-color-muted: #bbbbbb;
     --ra-primary: #0ad39a;
     --ra-background: #ffffff;
     --ra-border-radius: 6px;
@@ -10,6 +11,7 @@
   .ra {
     color: var(--ra-color);
     background: var(--ra-background);
+    line-height: 1.4;
   }
   .ra a {
     color: var(--ra-primary);
@@ -19,12 +21,18 @@
     cursor: pointer;
     text-decoration: underline;
   }
+  .ra-text-muted {
+    color: var(--ra-color-muted);
+  }
+  .ra-text-primary {
+    color: var(--ra-primary);
+  }
   .ra-wrapper {
     margin: 0 auto;
     padding: 16px;
     max-width: 800px;
   }
-  .-altra .ra-error {
+  .ra .ra-error {
     color: #B91C1C;
     background: #FEE2E2;
     padding: 12px 16px;
@@ -81,13 +89,15 @@
   .ra .ra-loading-inline {
     margin: 16px 0;
     padding: 80px 16px;
+    color: var(--ra-color-muted);
+    font-size: 18px;
     text-align: center;
-    background: var(--ra-background-alt);
+    border: 2px solid var(--ra-background-alt);
     border-radius: var(--ra-border-radius);
   }
   .ra .ra-box {
     padding: 8px;
-    border: 1px solid var(--ra-background-alt);
+    border: 2px solid var(--ra-background-alt);
     border-radius: var(--ra-border-radius);
   }
   .ra .ra-tabs a {
@@ -107,7 +117,7 @@
     display: block;
     padding: 16px;
     color: var(--ra-color);
-    background: var(--ra-background-alt);
+    border: 2px solid var(--ra-background-alt);
     border-radius: var(--ra-border-radius);
     font-size: 22px;
     font-weight: bold;
@@ -223,6 +233,19 @@
     return a.slice(0, 6) + "..." + a.slice(-4);
   }
 
+  function formatDate(epoch) {
+    const d = new Date(epoch.toNumber() * 1000);
+    if (d.getTime() === 0) return "N/A";
+    const pad = (s) => ("0" + s).slice(-2);
+    return [
+      d.getFullYear() + "-",
+      pad(d.getMonth() + 1) + "-",
+      pad(d.getDate()) + " ",
+      pad(d.getHours()) + ":",
+      pad(d.getMinutes()),
+    ].join("");
+  }
+
   const PageProposals = {
     oninit: async function () {
       this.loading = true;
@@ -234,9 +257,9 @@
           i >= 0 && i > proposalsCount - 10;
           i--
         ) {
-          const proposal = await daoContract.proposals(i);
+          const proposal = await daoContract.proposal(i);
           this.proposals.push(proposal);
-          console.log(proposal);
+          console.log("P", proposal);
         }
       } finally {
         this.loading = false;
@@ -272,20 +295,39 @@
 
   const PageProposal = {
     oninit: async function () {
-      this.proposal = await daoContract.proposals(state.pageArg);
+      // [id, proposer, title, startAt, endAt, executableAt, executedAt]
+      this.proposal = await daoContract.proposal(state.pageArg);
+      // [description, snapshotId, votersSupply, oNames, oActions, oVotes]
+      this.proposalDetails = await daoContract.proposalDetails(state.pageArg);
+      console.log("PD", this.proposal, this.proposalDetails);
       m.redraw();
     },
     view: function () {
+      function renderAction(a, i) {
+        const [target, value, data] = ethers.utils.defaultAbiCoder.decode(
+          ["address", "uint", "bytes"],
+          a
+        );
+        return m("div.ra-box", { key: i, style: "margin-top: 4px;" }, [
+          m("div", {}, "Target: " + target),
+          m("div", {}, "Value: " + ethers.utils.formatEther(value)),
+          m("div", {}, "Data: " + data),
+        ]);
+      }
+
       if (!this.proposal) {
         return m("div.ra-loading-inline", {}, "Loading...");
       }
       return m("div", {}, [
         m("div", { style: "display: flex;align-items: center;" }, [
-          m(
-            "h1",
-            { style: "flex: 1;" },
-            "#" + (this.proposal[0].toNumber() + 1) + " " + this.proposal[2]
-          ),
+          m("h1", { style: "flex: 1;margin-bottom: 0;" }, [
+            m(
+              "span.ra-text-muted",
+              {},
+              "#" + (this.proposal[0].toNumber() + 1)
+            ),
+            " " + this.proposal[2],
+          ]),
           m(
             "button.ra-button",
             { onclick: () => (state.page = "proposals") },
@@ -295,19 +337,48 @@
         m("div.ra-twocol", { style: "margin: 16px 0;" }, [
           m("div", {}, [
             m(
-              "div",
+              "div.ra-box",
               { style: "white-space: pre-wrap;margin-bottom: 16px;" },
-              this.proposal[3]
+              this.proposalDetails[0]
             ),
             m("h3", {}, "Vote"),
-            m("div.ra-box", { style: "margin-bottom: 8px;" }, ["For"]),
-            m("div.ra-box", { style: "margin-bottom: 8px;" }, ["Against"]),
+            this.proposalDetails[3].map((name, i) =>
+              m("div.ra-box", { key: i, style: "margin-bottom: 8px;" }, [
+                m("div", { style: "display: flex;" }, [
+                  m("div", { style: "flex:1;" }, name),
+                  m(
+                    "div.ra-text-primary",
+                    {},
+                    this.proposalDetails[5][i].toNumber() + " votes"
+                  ),
+                ]),
+                this.proposalDetails[4][i].map(renderAction.bind(this)),
+              ])
+            ),
           ]),
           m("div", {}, [
-            m("div.ra-box", { style: "" }, [
-              m("b", {}, "Proposer: "),
-              formatAddress(this.proposal[1].toString()),
-            ]),
+            m(
+              "div.ra-box",
+              { style: "" },
+              [
+                ["Proposer", formatAddress(this.proposal[1].toString())],
+                ["Starts", formatDate(this.proposal[3])],
+                ["Ends", formatDate(this.proposal[4])],
+                ["Executable", formatDate(this.proposal[5])],
+                ["Executed", formatDate(this.proposal[6])],
+                ["Supply", ethers.utils.formatEther(this.proposalDetails[2])],
+                ["Snapshot ID", this.proposalDetails[1].toNumber().toString()],
+              ].map((row) =>
+                m("div", { style: "display:flex;" }, [
+                  m(
+                    "div",
+                    { style: "font-weight:bold;flex:1;" },
+                    row[0] + ": "
+                  ),
+                  m("div", { style: "text-align:right;" }, row[1]),
+                ])
+              )
+            ),
           ]),
         ]),
       ]);
@@ -316,6 +387,7 @@
 
   const PageProposalsNew = {
     oninit: function () {
+      this.againstName = "Against";
       this.proposal = {
         title: "",
         description: "",
@@ -357,6 +429,8 @@
             }
             optionActions.push(actions);
           }
+          optionNames.push(this.againstName);
+          optionActions.push([]);
           const votingTime = await daoContract.minVotingTime();
           const executionDelay = await daoContract.minExecutionDelay();
           await (
@@ -504,8 +578,7 @@
               m("label.ra-label", {}, "Name"),
               m("input.ra-input", {
                 style: "width:100%",
-                value: "Against",
-                disabled: true,
+                value: this.againstName,
               }),
             ]),
             m(
@@ -617,6 +690,15 @@
       if (loading === 0) {
         daoContract = new ethers.Contract(options.address, daoAbi, provider);
         window.daoContract = daoContract; // debug
+        if (window.location.hash) {
+          const [page, arg] = window.location.hash.slice(1).split("/");
+          if (
+            ["proposal", "proposals-new", "treasury", "token"].includes(page)
+          ) {
+            state.page = page;
+            if (arg) state.pageArg = arg;
+          }
+        }
         m.mount(rootEl, App);
       }
     }

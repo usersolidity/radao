@@ -13,8 +13,8 @@ async function main() {
 
   const tx = await (
     await factory.create(
-      "Z DAO Voting Token",
-      "ZDAO",
+      "Z Voting Token",
+      "Z",
       "0x0000000000000000000000000000000000000000",
       0,
       500000000000,
