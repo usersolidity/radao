@@ -27,6 +27,11 @@
   .ra-text-primary {
     color: var(--ra-primary);
   }
+  .ra-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .ra-wrapper {
     margin: 0 auto;
     padding: 16px;
@@ -115,11 +120,11 @@
   }
   .ra .ra-proposal-tile {
     display: block;
-    padding: 16px;
+    padding: 8px;
     color: var(--ra-color);
     border: 2px solid var(--ra-background-alt);
     border-radius: var(--ra-border-radius);
-    font-size: 22px;
+    font-size: 20px;
     font-weight: bold;
     margin-bottom: 16px;
   }
@@ -128,10 +133,19 @@
     cursor: pointer;
     text-decoration: none;
   }
-  .ra .ra-proposal-tile span {
+  .ra .ra-proposal-tile > span {
     display: inline-block;
     margin-right: 8px;
-    color: #bbbbbb;
+    color: var(--ra-color-muted);
+  }
+  .ra .ra-proposal-tile-status {
+    display: inline-block;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 4px 8px;
+    margin-left: 8px;
+    background: var(--ra-background-alt);
+    border-radius: var(--ra-border-radius);
   }
   @media (min-width: 700px) {
     .ra .ra-twocol {
@@ -209,9 +223,13 @@
     "function symbol() view returns (string)",
     "function totalSupply() view returns (uint256)",
     "function balanceOf(address) view returns (uint256)",
+    "function allowance(address,address) view returns (uint256)",
+    "function approve(address,uint) returns (bool)",
+    "function transfer(address,uint) returns (bool)",
   ];
 
-  const ADDRESS_ZERO = "0x0000000000000000000000000000000000000000";
+  const ADDRESS_ZERO = "0x" + "0".repeat(40);
+  const ZERO_BYTES32 = "0x" + "0".repeat(64);
 
   let state = {
     options: {},
@@ -265,6 +283,12 @@
     ].join("");
   }
 
+  function navigate(page, arg) {
+    state.page = page;
+    state.pageArg = arg;
+    window.location.hash = page + (arg ? "/" + arg : "");
+  }
+
   const PageProposals = {
     oninit: async function () {
       this.loading = true;
@@ -278,7 +302,6 @@
         ) {
           const proposal = await daoContract.proposal(i);
           this.proposals.push(proposal);
-          console.log("P", proposal);
         }
       } finally {
         this.loading = false;
@@ -291,7 +314,7 @@
           m("h1", { style: "flex: 1;" }, "Proposals"),
           m(
             "button.ra-button",
-            { onclick: () => (state.page = "proposals-new") },
+            { onclick: () => navigate("proposals-new") },
             "New Proposal"
           ),
         ]),
@@ -300,12 +323,28 @@
           m(
             "a.ra-proposal-tile",
             {
-              onclick: () => {
-                state.page = "proposal";
-                state.pageArg = p[0].toNumber();
-              },
+              onclick: () => navigate("proposal", p[0].toNumber()),
             },
-            [m("span", {}, "#" + (p[0].toNumber() + 1)), p[2]]
+            [
+              m("span", {}, "#" + (p[0].toNumber() + 1)),
+              p[2],
+              m(
+                "div",
+                { style: "float: right;font-size: 14px;font-weight: normal;" },
+                [
+                  formatDate(p[3]),
+                  m(
+                    "span.ra-proposal-tile-status",
+                    {},
+                    Date.now() < p[3].toNumber() * 1000
+                      ? "Voting"
+                      : p[6].toNumber() != 0
+                      ? "Executed"
+                      : "Pending"
+                  ),
+                ]
+              ),
+            ]
           )
         ),
       ]);
@@ -313,14 +352,63 @@
   };
 
   const PageProposal = {
-    oninit: async function () {
+    oninit: function () {
+      this.load();
+    },
+
+    load: async function () {
       // [id, proposer, title, startAt, endAt, executableAt, executedAt]
       this.proposal = await daoContract.proposal(state.pageArg);
       // [description, snapshotId, votersSupply, oNames, oActions, oVotes]
       this.proposalDetails = await daoContract.proposalDetails(state.pageArg);
-      console.log("PD", this.proposal, this.proposalDetails);
+
+      this.signer = await getSigner();
+      this.signerAddress = await this.signer.getAddress();
+      this.votedFor = (
+        await daoContract.proposalVotes(state.pageArg, this.signerAddress)
+      ).toNumber();
+      console.log("debug pd", this.proposal, this.proposalDetails);
       m.redraw();
     },
+
+    handleVote: async function (i) {
+      const tx = await daoContract
+        .connect(this.signer)
+        .vote(this.proposal[0], i, 0, ZERO_BYTES32, ZERO_BYTES32);
+      await tx.wait();
+      this.votedFor = i + 1;
+      m.redraw();
+    },
+
+    handleExecute: async function () {
+      try {
+        const signer = await getSigner();
+        const tx = await daoContract.connect(signer).execute(state.pageArg);
+        await tx.wait();
+        this.load();
+      } catch (err) {
+        console.error(err);
+        alert(err?.data?.message || err.message);
+      }
+    },
+
+    renderVoteButton: function (i) {
+      if (this.votedFor === i + 1) {
+        return m("b", { style: "margin-left: 8px;" }, "Voted");
+      }
+      if (this.votedFor || Date.now() > this.proposal[4].toNumber() * 1000) {
+        return null;
+      }
+      return m(
+        "button.ra-button",
+        {
+          style: "padding: 4px 8px;margin-left: 8px;",
+          onclick: this.handleVote.bind(this, i),
+        },
+        "Vote"
+      );
+    },
+
     view: function () {
       function renderAction(a, i) {
         const [target, value, data] = ethers.utils.defaultAbiCoder.decode(
@@ -328,9 +416,9 @@
           a
         );
         return m("div.ra-box", { key: i, style: "margin-top: 4px;" }, [
-          m("div", {}, "Target: " + target),
+          m("div.ra-truncate", { title: target }, "Target: " + target),
           m("div", {}, "Value: " + ethers.utils.formatEther(value)),
-          m("div", {}, "Data: " + data),
+          m("div.ra-truncate", {}, "Data: " + data),
         ]);
       }
 
@@ -349,12 +437,12 @@
           ]),
           m(
             "button.ra-button",
-            { onclick: () => (state.page = "proposals") },
+            { onclick: () => navigate("proposals") },
             "Back"
           ),
         ]),
         m("div.ra-twocol", { style: "margin: 16px 0;" }, [
-          m("div", {}, [
+          m("div", { style: "overflow: hidden;" }, [
             m(
               "div.ra-box",
               { style: "white-space: pre-wrap;margin-bottom: 16px;" },
@@ -368,17 +456,17 @@
                   m(
                     "div.ra-text-primary",
                     {},
-                    this.proposalDetails[5][i].toNumber() + " votes"
+                    ethers.utils.formatUnits(this.proposalDetails[5][i], 18) +
+                      " votes"
                   ),
+                  this.renderVoteButton(i),
                 ]),
                 this.proposalDetails[4][i].map(renderAction.bind(this)),
               ])
             ),
           ]),
           m("div", {}, [
-            m(
-              "div.ra-box",
-              { style: "" },
+            m("div.ra-box", { style: "" }, [
               [
                 ["Proposer", formatAddress(this.proposal[1].toString())],
                 ["Starts", formatDate(this.proposal[3])],
@@ -396,8 +484,11 @@
                   ),
                   m("div", { style: "text-align:right;" }, row[1]),
                 ])
-              )
-            ),
+              ),
+              Date.now() > this.proposal[5].toNumber() * 1000
+                ? m("a", { onclick: this.handleExecute.bind(this) }, "Execute")
+                : null,
+            ]),
           ]),
         ]),
       ]);
@@ -466,11 +557,17 @@
           ).wait();
           const proposalId =
             (await daoContract.proposalsCount()).toNumber() - 1;
-          state.page = "proposal";
-          state.pageArg = proposalId;
+          navigate("proposal", proposalId);
           m.redraw();
         } catch (err) {
-          this.error = err.message;
+          if ((err?.data?.message || "").includes("<balance")) {
+            const minBalance = ethers.utils.formatEther(
+              await daoContract.minBalanceToPropose()
+            );
+            this.error = `You need at least ${minBalance} tokens to propose`;
+          } else {
+            this.error = err.message;
+          }
         } finally {
           this.loading = false;
           m.redraw();
@@ -498,7 +595,7 @@
           m("h1", { style: "flex: 1;" }, "New Proposal"),
           m(
             "button.ra-button",
-            { onclick: () => (state.page = "proposals") },
+            { onclick: () => navigate("proposals") },
             "Back"
           ),
         ]),
@@ -612,11 +709,162 @@
   };
 
   const PageTreasury = {
+    oninit: async function () {
+      this.tokens = [
+        {
+          id: "eth",
+          chain: "eth",
+          name: "ETH",
+          symbol: "ETH",
+          display_symbol: null,
+          optimized_symbol: "ETH",
+          decimals: 18,
+          logo_url:
+            "https://static.debank.com/image/token/logo_url/eth/935ae4e4d1d12d59a99717a24f2540b5.png",
+          price: 2158.73,
+          is_verified: true,
+          is_core: true,
+          is_wallet: true,
+          time_at: 1483200000,
+          amount: 0.40433976773323665,
+        },
+        {
+          id: "0x6b175474e89094c44da98b954eedeac495271d0f",
+          chain: "eth",
+          name: "Dai Stablecoin",
+          symbol: "DAI",
+          display_symbol: null,
+          optimized_symbol: "DAI",
+          decimals: 18,
+          logo_url:
+            "https://static.debank.com/image/token/logo_url/0x6b175474e89094c44da98b954eedeac495271d0f/549c4205dbb199f1b8b03af783f35e71.png",
+          price: 1,
+          is_verified: true,
+          is_core: true,
+          is_wallet: true,
+          time_at: 1573672677,
+          amount: 0.05209338,
+        },
+      ];
+
+      this.usdValue = (
+        await fetch(
+          "https://openapi.debank.com/v1/user/chain_balance?chain_id=eth&id=" +
+            daoContract.address
+        ).then((r) => r.json())
+      ).usd_value;
+      m.redraw();
+
+      // id,name,symbol,decimals,logo_url,price,amount
+      /*
+      this.tokens = await fetch(
+        "https://openapi.debank.com/v1/user/token_list?chain_id=eth&is_all=true&id=" +
+          daoContract.address
+      ).then((r) => r.json()).sort((a, b) => (a.amount*a.price - b.amount-a.price));
+      */
+      m.redraw();
+    },
+
+    handleTransfer: async function (tokenSymbol, tokenAddress, decimals) {
+      try {
+        const target = prompt("Address to send to:");
+        if (!target) return;
+        const amountText = prompt("Amount to send:");
+        if (!amountText) return;
+        const amount = ethers.utils.parseUnits(amountText, decimals);
+
+        let transferAction;
+        if (tokenAddress == "eth") {
+          transferAction = ethers.utils.defaultAbiCoder.encode(
+            ["address", "uint", "bytes"],
+            [target, amount, "0x"]
+          );
+        } else {
+          const actionData = new ethers.utils.Interface(
+            erc20Abi
+          ).encodeFunctionData("transfer", [target, amount]);
+          transferAction = ethers.utils.defaultAbiCoder.encode(
+            ["address", "uint", "bytes"],
+            [tokenAddress, "0", actionData]
+          );
+        }
+        const votingTime = await daoContract.minVotingTime();
+        const executionDelay = await daoContract.minExecutionDelay();
+        const title =
+          "Transfer " +
+          ethers.utils.formatUnits(amount, decimals) +
+          " " +
+          tokenSymbol;
+        await (
+          await daoContract
+            .connect(await getSigner())
+            .propose(
+              title,
+              title + " to " + target,
+              votingTime,
+              executionDelay,
+              ["Transfer", "Do Not Transfer"],
+              [[transferAction], []]
+            )
+        ).wait();
+        const proposalId = (await daoContract.proposalsCount()).toNumber() - 1;
+        navigate("proposal", proposalId);
+        m.redraw();
+      } catch (err) {
+        console.log(err);
+        alert("Error: " + err.message);
+      }
+    },
+
     view: function () {
+      if (typeof this.usdValue === "undefined") {
+        return m("div.ra-loading-inline", {}, "Loading...");
+      }
       return m("div", {}, [
         m("div", { style: "display: flex;align-items: center;" }, [
-          m("h1", { style: "flex: 1;" }, "Treasury"),
+          m("h1", { style: "flex: 1;margin-bottom: 0;" }, "Treasury"),
         ]),
+        m("h3", { style: "margin-bottom: 8px;" }, "USD Value"),
+        m(
+          "div.ra-box",
+          { style: "text-align: center;font-size: 22px;padding: 16px 0;" },
+          "$ " + this.usdValue.toFixed(2)
+        ),
+        m("h3", { style: "margin-bottom: 8px;" }, "Assets"),
+        this.tokens.map((t) =>
+          m("div.ra-box", { style: "display: flex;margin-bottom: 8px;" }, [
+            m("div", { style: "flex: 1;display: flex;align-items: center;" }, [
+              m("img", {
+                src:
+                  t.logo_url ||
+                  "https://etherscan.io/images/main/empty-token.png",
+                style: "width: 24px;height: 24px;margin-right: 8px;",
+              }),
+              m(
+                "b",
+                { style: "margin-right: 8px;" },
+                `${t.name} (${t.symbol})`
+              ),
+              t.amount.toFixed(4),
+            ]),
+            m("div", {}, [
+              "$ " + (t.amount * t.price).toFixed(2),
+              m(
+                "button.ra-button",
+                {
+                  style: "padding: 4px 8px;margin-left: 8px;",
+                  onclick: this.handleTransfer.bind(
+                    this,
+                    t.symbol,
+                    t.id,
+                    t.decimals
+                  ),
+                },
+                "Transfer"
+              ),
+            ]),
+          ])
+        ),
       ]);
     },
   };
@@ -624,6 +872,8 @@
   const PageToken = {
     oninit: async function () {
       this.newDelegate = "";
+      this.lockAmount = "";
+      this.unlockAmount = "";
 
       const signer = await getSigner();
       this.signerAddress = await signer.getAddress();
@@ -637,11 +887,15 @@
       );
       this.votingTokenName = await this.votingTokenContract.name();
       this.votingTokenSymbol = await this.votingTokenContract.symbol();
-      console.log(votingTokenAddress);
+      this.votingTokenTotalSupply = parseFloat(
+        ethers.utils.formatUnits(await this.votingTokenContract.totalSupply())
+      );
+      this.totalWrapped = parseFloat(
+        ethers.utils.formatUnits(await daoContract.totalWrapped())
+      );
 
       const wrappedTokenAddress = await daoContract.wrappedToken();
       if (wrappedTokenAddress != ADDRESS_ZERO) {
-        console.log(wrappedTokenAddress);
         this.wrappedTokenContract = new ethers.Contract(
           wrappedTokenAddress,
           erc20Abi,
@@ -649,9 +903,11 @@
         );
         this.wrappedTokenName = await this.wrappedTokenContract.name();
         this.wrappedTokenSymbol = await this.wrappedTokenContract.symbol();
-      } else {
-        this.votingTokenTotalSupply =
-          await this.votingTokenContract.totalSupply();
+        this.wrappedTokenTotalSupply = parseFloat(
+          ethers.utils.formatUnits(
+            await this.wrappedTokenContract.totalSupply()
+          )
+        );
       }
 
       this.loadBalances();
@@ -665,16 +921,67 @@
         this.wrappedTokenBalance = await this.wrappedTokenContract.balanceOf(
           this.signerAddress
         );
+        this.wrappedTokenAllowance = await this.wrappedTokenContract.allowance(
+          this.signerAddress,
+          daoContract.address
+        );
       }
       m.redraw();
     },
 
+    lockEstimate: function () {
+      return (
+        ((parseFloat(this.lockAmount) || 0) * this.votingTokenTotalSupply) /
+        this.totalWrapped
+      );
+    },
+
+    unlockEstimate: function () {
+      return (
+        ((parseFloat(this.unlockAmount) || 0) * this.totalWrapped) /
+        this.votingTokenTotalSupply
+      );
+    },
+
     handleSetDelegate: async function (e) {
       e.preventDefault();
-      await daoContract.connect(await getSigner()).delegate(this.newDelegate);
+      const contract = daoContract.connect(await getSigner());
+      await contract.delegate(this.newDelegate);
       this.delegate = this.newDelegate;
       this.newDelegate = "";
       m.redraw();
+    },
+
+    handleLock: async function (e) {
+      e.preventDefault();
+
+      if (this.wrappedTokenAllowance.lte(ethers.constants.Zero)) {
+        const token = this.wrappedTokenContract.connect(await getSigner());
+        await (
+          await token.approve(daoContract.address, ethers.constants.MaxUint256)
+        ).wait();
+        this.loadBalances();
+        return;
+      }
+
+      const contract = daoContract.connect(await getSigner());
+      const tx = await contract.lock(ethers.utils.parseEther(this.lockAmount));
+      this.lockAmount = "";
+      m.redraw();
+      await tx.wait();
+      this.loadBalances();
+    },
+
+    handleUnlock: async function (e) {
+      e.preventDefault();
+      const contract = daoContract.connect(await getSigner());
+      const tx = await contract.unlock(
+        ethers.utils.parseEther(this.unlockAmount)
+      );
+      this.unlockAmount = "";
+      m.redraw();
+      await tx.wait();
+      this.loadBalances();
     },
 
     view: function () {
@@ -697,7 +1004,7 @@
               { style: "text-align: center;font-size: 22px;padding: 16px 0;" },
               ethers.utils.formatEther(this.votingTokenBalance)
             ),
-            m("h3", { style: "margin: 16px 0 8px;" }, "Delegate"),
+            m("h3", { style: "margin: 16px 0 8px;" }, "Delegate Voting Power"),
             m("div.ra-box", { style: "padding: 16px;" }, [
               m("div", { style: "margin-bottom: 8px;" }, [
                 m("b", {}, "Delegating To: "),
@@ -734,6 +1041,56 @@
                   },
                   ethers.utils.formatEther(this.wrappedTokenBalance || 0)
                 ),
+                m(
+                  "h3",
+                  { style: "margin: 16px 0 8px;" },
+                  `Lock ${this.wrappedTokenSymbol} for ${this.votingTokenSymbol}`
+                ),
+                m("div.ra-box", { style: "padding: 16px;" }, [
+                  m("input.ra-input", {
+                    style: "width: 100%;display: block;margin-bottom: 8px;",
+                    placeholder: "0.0",
+                    value: this.lockAmount,
+                    onchange: (e) => (this.lockAmount = e.target.value),
+                  }),
+                  m(
+                    "button.ra-button",
+                    {
+                      style: "width: 100%;display: block;",
+                      onclick: this.handleLock.bind(this),
+                    },
+                    this.wrappedTokenAllowance.lte(ethers.constants.Zero)
+                      ? "Approve"
+                      : "Lock for " +
+                          this.lockEstimate().toFixed(3) +
+                          " " +
+                          this.votingTokenSymbol
+                  ),
+                ]),
+                m(
+                  "h3",
+                  { style: "margin: 16px 0 8px;" },
+                  `Unlock ${this.votingTokenSymbol} for ${this.wrappedTokenSymbol}`
+                ),
+                m("div.ra-box", { style: "padding: 16px;" }, [
+                  m("input.ra-input", {
+                    style: "width: 100%;display: block;margin-bottom: 8px;",
+                    placeholder: "0.0",
+                    value: this.unlockAmount,
+                    onchange: (e) => (this.unlockAmount = e.target.value),
+                  }),
+                  m(
+                    "button.ra-button",
+                    {
+                      style: "width: 100%;display: block;",
+                      onclick: this.handleUnlock.bind(this),
+                    },
+                    "Unlock for " +
+                      this.unlockEstimate().toFixed(3) +
+                      " " +
+                      this.wrappedTokenSymbol
+                  ),
+                ]),
               ])
             : m("div", {}, [
                 m("h2", { style: "margin: 0 0 8px;" }, "Total Supply"),
@@ -743,7 +1100,7 @@
                     style:
                       "text-align: center;font-size: 22px;padding: 16px 0;",
                   },
-                  ethers.utils.formatEther(this.votingTokenTotalSupply)
+                  this.votingTokenTotalSupply.toFixed(0)
                 ),
               ]),
         ]),
@@ -794,17 +1151,17 @@
           m("div.ra-tabs", {}, [
             m(
               "a" + (state.page === "proposals" ? ".ra-tabs-active" : ""),
-              { onclick: () => (state.page = "proposals") },
+              { onclick: () => navigate("proposals") },
               "Proposals"
             ),
             m(
               "a" + (state.page === "treasury" ? ".ra-tabs-active" : ""),
-              { onclick: () => (state.page = "treasury") },
+              { onclick: () => navigate("treasury") },
               "Treasury"
             ),
             m(
               "a" + (state.page === "token" ? ".ra-tabs-active" : ""),
-              { onclick: () => (state.page = "token") },
+              { onclick: () => navigate("token") },
               "Voting Token"
             ),
           ]),
@@ -834,8 +1191,7 @@
           if (
             ["proposal", "proposals-new", "treasury", "token"].includes(page)
           ) {
-            state.page = page;
-            if (arg) state.pageArg = arg;
+            navigate(page, arg);
           }
         }
         m.mount(rootEl, App);

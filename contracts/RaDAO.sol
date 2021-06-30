@@ -14,6 +14,8 @@ interface IVoters {
     function snapshot() external returns (uint);
     function totalSupplyAt(uint snapshotId) external view returns (uint);
     function votesAt(address account, uint snapshotId) external view returns (uint);
+    function mint(address account, uint amount) external;
+    function burn(address account, uint amount) external;
 }
 
 contract RaDAO {
@@ -150,7 +152,9 @@ contract RaDAO {
                 }
             }
         }
-        /* if (lower < snapshots.values.length) { return snapshots.values[lower]; } */
+        if (lower < snapshots.values.length) {
+          return snapshots.values[lower];
+        }
         return 0;
     }
 
@@ -198,16 +202,16 @@ contract RaDAO {
 
     function lock(uint amount) external {
         require(address(wrappedToken) != address(0), "!wrapped");
-        uint _totalWrapped = totalWrapped;
-        uint _totalSupply = totalSupply();
         safeTransferFrom(wrappedToken, msg.sender, address(this), amount);
-        if (_totalSupply == 0 || _totalWrapped == 0) {
-            unchecked { totalWrapped += amount; }
-            _mint(msg.sender, amount); // Mint 1:1 when first
+        uint _mintAmount = amount;
+        if (totalSupply() != 0 && totalWrapped != 0) {
+          _mintAmount = (amount * totalSupply()) / totalWrapped;
+        }
+        unchecked { totalWrapped += _mintAmount; }
+        if (address(voters) == address(this)) {
+          _mint(msg.sender, _mintAmount);
         } else {
-            uint _value = (amount * _totalSupply) / _totalWrapped;
-            unchecked { totalWrapped += _value; }
-            _mint(msg.sender, _value);
+          voters.mint(msg.sender, _mintAmount);
         }
     }
 
@@ -215,7 +219,11 @@ contract RaDAO {
         require(address(wrappedToken) != address(0), "!wrapped");
         uint _totalWrapped = totalWrapped;
         uint _totalSupply = totalSupply();
-        _burn(msg.sender, amount);
+        if (address(voters) == address(this)) {
+          _burn(msg.sender, amount);
+        } else {
+          voters.burn(msg.sender, amount);
+        }
         uint _value = (amount * _totalWrapped) / _totalSupply;
         totalWrapped -= _value;
         safeTransfer(wrappedToken, msg.sender, _value);
@@ -326,8 +334,7 @@ contract RaDAO {
           snapshotId = voters.snapshot();
         }
         require(voters.votesAt(msg.sender, snapshotId) >= minBalanceToPropose, "<balance");
-        require(optionNames.length == optionActions.length, "option size");
-        require(optionNames.length > 0 && optionNames.length <= 100, "option count");
+        require(optionNames.length == optionActions.length && optionNames.length > 0 && optionNames.length <= 100, "option len match or count");
         require(optionActions[optionActions.length - 1].length == 0, "last option, no action");
         require(votingTime >= minVotingTime, "<voting time");
         require(executionDelay >= minExecutionDelay, "<exec delay");
@@ -358,12 +365,9 @@ contract RaDAO {
                 require(optionActions[i].length <= 10, "actions length > 10");
                 newProposal.optionsNames[i] = optionNames[i];
             }
+
+            proposalsCount += 1;
         }
-
-        unchecked { proposalsCount += 1; }
-
-        // Add the "Against" / "None" option so that the voters always have the option of voting to do nothing
-        // Without this a proposer could submit 2 malicious options and one or the other would be guaranteed to execute
 
         latestProposalIds[msg.sender] = newProposal.id;
         emit Proposed(newProposal.id);
@@ -382,8 +386,7 @@ contract RaDAO {
           require(voter != address(0), "invalid signature");
         }
         Proposal storage p = proposals[proposalId];
-        require(block.timestamp < p.endAt, "voting ended");
-        require(proposalVotes[proposalId][voter] == 0, "already voted");
+        require(block.timestamp < p.endAt && proposalVotes[proposalId][voter] == 0, "voting ended or already voted");
         unchecked {
           p.optionsVotes[optionId] = p.optionsVotes[optionId] + voters.votesAt(voter, p.snapshotId);
           proposalVotes[proposalId][voter] = optionId + 1;
@@ -396,8 +399,7 @@ contract RaDAO {
     // Part of this is establishing which option "won" and if quorum was reached
     function execute(uint proposalId) external {
         Proposal storage p = proposals[proposalId];
-        require(block.timestamp > p.executableAt, "not yet executable");
-        require(p.executedAt == 0, "already executed");
+        require(p.executedAt == 0 && block.timestamp > p.executableAt, "executed or not executable");
         p.executedAt = block.timestamp; // Mark as executed now to prevent re-entrancy
 
         // Pick the winning option (the one with the most votes, defaulting to the "Against" (last) option
@@ -408,7 +410,8 @@ contract RaDAO {
             for (uint i = p.optionsNames.length - 1; i >= 0; i--) {
                 uint votes = p.optionsVotes[i];
                 votesTotal = votesTotal + votes;
-                // Use greater than (not equal) to avoid a proposal with 0 votes to default to the 1st option
+                // Use greater than (not equal) to avoid a proposal with 0 votes
+                // to default to the 1st option
                 if (votes > winningOptionVotes) {
                     winningOptionIndex = i;
                     winningOptionVotes = votes;
@@ -416,13 +419,15 @@ contract RaDAO {
             }
         }
 
-        require((votesTotal * 1e12) / p.votersSupply > minPercentQuorum, "execute: not at quorum");
+        require((votesTotal * 1e12) / p.votersSupply > minPercentQuorum, "not at quorum");
 
         // Run all actions attached to the winning option
-        bytes[] memory winningOptionActions = p.optionsActions[winningOptionIndex];
         unchecked {
-          for (uint i = 0; i < winningOptionActions.length; i++) {
-              (address to, uint value, bytes memory data) = abi.decode(winningOptionActions[i], (address, uint, bytes));
+          for (uint i = 0; i < p.optionsActions[winningOptionIndex].length; i++) {
+              (address to, uint value, bytes memory data) = abi.decode(
+                p.optionsActions[winningOptionIndex][i],
+                (address, uint, bytes)
+              );
               (bool success,) = to.call{value: value}(data);
               require(success, "action reverted");
               emit Executed(to, value, data);
