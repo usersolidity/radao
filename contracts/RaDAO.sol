@@ -271,7 +271,7 @@ contract RaDAO {
     uint public minPercentQuorum;
     uint public minVotingTime;
     uint public minExecutionDelay;
-    IVoters voters;
+    IVoters public voters;
     uint public proposalsCount;
     mapping(uint => Proposal) private proposals;
     mapping(uint => mapping(address => uint)) public proposalVotes;

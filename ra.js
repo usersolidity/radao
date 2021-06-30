@@ -144,6 +144,15 @@
     .ra .ra-twocol > div:nth-child(2) {
       flex: 0 0 256px;
     }
+    .ra .ra-twocol-even {
+      display: flex;
+    }
+    .ra .ra-twocol-even > div {
+      flex: 1;
+    }
+    .ra .ra-twocol-even > div:nth-child(1) {
+      padding-right: 32px;
+    }
   }
   `;
 
@@ -191,8 +200,18 @@
     "function unlock(uint256)",
     "function vote(uint256,uint256,uint8,bytes32,bytes32)",
     "function votesAt(address,uint256) view returns (uint256)",
+    "function voters() view returns (address)",
     "function wrappedToken() view returns (address)",
   ];
+
+  const erc20Abi = [
+    "function name() view returns (string)",
+    "function symbol() view returns (string)",
+    "function totalSupply() view returns (uint256)",
+    "function balanceOf(address) view returns (uint256)",
+  ];
+
+  const ADDRESS_ZERO = "0x0000000000000000000000000000000000000000";
 
   let state = {
     options: {},
@@ -603,10 +622,130 @@
   };
 
   const PageToken = {
+    oninit: async function () {
+      this.newDelegate = "";
+
+      const signer = await getSigner();
+      this.signerAddress = await signer.getAddress();
+      this.delegate = await daoContract.delegates(this.signerAddress);
+
+      const votingTokenAddress = await daoContract.voters();
+      this.votingTokenContract = new ethers.Contract(
+        votingTokenAddress,
+        erc20Abi,
+        provider
+      );
+      this.votingTokenName = await this.votingTokenContract.name();
+      this.votingTokenSymbol = await this.votingTokenContract.symbol();
+      console.log(votingTokenAddress);
+
+      const wrappedTokenAddress = await daoContract.wrappedToken();
+      if (wrappedTokenAddress != ADDRESS_ZERO) {
+        console.log(wrappedTokenAddress);
+        this.wrappedTokenContract = new ethers.Contract(
+          wrappedTokenAddress,
+          erc20Abi,
+          provider
+        );
+        this.wrappedTokenName = await this.wrappedTokenContract.name();
+        this.wrappedTokenSymbol = await this.wrappedTokenContract.symbol();
+      } else {
+        this.votingTokenTotalSupply =
+          await this.votingTokenContract.totalSupply();
+      }
+
+      this.loadBalances();
+    },
+
+    loadBalances: async function () {
+      this.votingTokenBalance = await this.votingTokenContract.balanceOf(
+        this.signerAddress
+      );
+      if (this.wrappedTokenContract) {
+        this.wrappedTokenBalance = await this.wrappedTokenContract.balanceOf(
+          this.signerAddress
+        );
+      }
+      m.redraw();
+    },
+
+    handleSetDelegate: async function (e) {
+      e.preventDefault();
+      await daoContract.connect(await getSigner()).delegate(this.newDelegate);
+      this.delegate = this.newDelegate;
+      this.newDelegate = "";
+      m.redraw();
+    },
+
     view: function () {
+      if (!this.votingTokenBalance) {
+        return m("div.ra-loading-inline", {}, "Loading...");
+      }
       return m("div", {}, [
         m("div", { style: "display: flex;align-items: center;" }, [
           m("h1", { style: "flex: 1;" }, "Voting Token"),
+        ]),
+        m("div.ra-twocol-even", { style: "margin-bottom: 16px;" }, [
+          m("div", {}, [
+            m(
+              "h2",
+              { style: "margin: 0 0 8px;" },
+              this.votingTokenName + " (" + this.votingTokenSymbol + ")"
+            ),
+            m(
+              "div.ra-box",
+              { style: "text-align: center;font-size: 22px;padding: 16px 0;" },
+              ethers.utils.formatEther(this.votingTokenBalance)
+            ),
+            m("h3", { style: "margin: 16px 0 8px;" }, "Delegate"),
+            m("div.ra-box", { style: "padding: 16px;" }, [
+              m("div", { style: "margin-bottom: 8px;" }, [
+                m("b", {}, "Delegating To: "),
+                formatAddress(this.delegate),
+              ]),
+              m("input.ra-input", {
+                style: "width: 100%;display: block;margin-bottom: 8px;",
+                placeholder: "0x0000...",
+                value: this.newDelegate,
+                onchange: (e) => (this.newDelegate = e.target.value),
+              }),
+              m(
+                "button.ra-button",
+                {
+                  style: "width: 100%;display: block;",
+                  onclick: this.handleSetDelegate.bind(this),
+                },
+                "Update Delegate"
+              ),
+            ]),
+          ]),
+          this.wrappedTokenContract
+            ? m("div", {}, [
+                m(
+                  "h2",
+                  { style: "margin: 0 0 8px;" },
+                  this.wrappedTokenName + " (" + this.wrappedTokenSymbol + ")"
+                ),
+                m(
+                  "div.ra-box",
+                  {
+                    style:
+                      "text-align: center;font-size: 22px;padding: 16px 0;",
+                  },
+                  ethers.utils.formatEther(this.wrappedTokenBalance || 0)
+                ),
+              ])
+            : m("div", {}, [
+                m("h2", { style: "margin: 0 0 8px;" }, "Total Supply"),
+                m(
+                  "div.ra-box",
+                  {
+                    style:
+                      "text-align: center;font-size: 22px;padding: 16px 0;",
+                  },
+                  ethers.utils.formatEther(this.votingTokenTotalSupply)
+                ),
+              ]),
         ]),
       ]);
     },

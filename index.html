@@ -95,10 +95,11 @@
           ethers.utils.parseUnits(minPercentQuorum, 10),
           parseInt(minVotingTime)*60, parseInt(minExecutionDelay)*60
         )).wait();
-        console.log(tx);
+        console.log(JSON.stringify(tx.logs, null, 2));
+        console.log(JSON.stringify(tx.events, null, 2));
         const votingAddress = '0x'+tx.events[tx.events.length - 1].topics[1].slice(-40);
-        setupDao(votingAddress);
-        setTimeout(() => alert('DAO Created! Address: ' + votingAddress), 250);
+        alert('DAO Created! Address: ' + votingAddress);
+        window.location.href = '/?address='+votingAddress;
       } catch (err) {
         console.error(err);
         alert('Error: ' + err.message);
