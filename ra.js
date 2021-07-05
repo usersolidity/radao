@@ -951,7 +951,7 @@
         const amount = ethers.utils.parseUnits(this.swapAmount, tokenFrom.decimals);
 
         let approveAction;
-        if (tokenFrom !== '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE') {
+        if (tokenFrom.address !== '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE') {
           const approveResponse = await fetchJson(`https://api.1inch.exchange/v3.0/${chainId}/approve/calldata?tokenAddress=${tokenFrom.address}&amount=${amount.toString()}`);
           approveAction = ethers.utils.defaultAbiCoder.encode(
             ["address", "uint", "bytes"],
