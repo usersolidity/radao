@@ -3,7 +3,7 @@
   :root {
     --ra-color: #000000;
     --ra-color-muted: #bbbbbb;
-    --ra-primary: #0ad39a;
+    --ra-primary: #54D1DB;
     --ra-background: #ffffff;
     --ra-border-radius: 6px;
   }
@@ -237,9 +237,8 @@
     pageArg: null,
   };
 
-  const chainId = ethers.BigNumber.from(window.ethereum.chainId).toNumber();
-  const provider = new ethers.providers.Web3Provider(window.ethereum);
-  window.provider = provider; // debug
+  let chainId = 1;
+  let provider;
   let signer;
   async function getSigner() {
     if (signer) return signer;
@@ -1418,6 +1417,8 @@
     function onLoad() {
       loading--;
       if (loading === 0) {
+        chainId = ethers.BigNumber.from(window.ethereum.chainId).toNumber();
+        provider = new ethers.providers.Web3Provider(window.ethereum);
         daoContract = new ethers.Contract(options.address, daoAbi, provider);
         window.daoContract = daoContract; // debug
         if (window.location.hash) {
@@ -1439,10 +1440,10 @@
       script.onload = cb;
       document.head.append(script);
     }
-    if (!ethers) {
+    if (!window.ethers) {
       loadScript("https://cdn.ethers.io/lib/ethers-5.2.umd.min.js", onLoad);
     }
-    if (!m && !m.mount) {
+    if (!window.m || !window.m.mount) {
       loadScript("https://unpkg.com/mithril/mithril.js", onLoad);
     }
     onLoad();
