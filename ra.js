@@ -237,6 +237,7 @@
     pageArg: null,
   };
 
+  const chainId = ethers.BigNumber.from(window.ethereum.chainId).toNumber();
   const provider = new ethers.providers.Web3Provider(window.ethereum);
   window.provider = provider; // debug
   let signer;
@@ -287,6 +288,13 @@
     state.page = page;
     state.pageArg = arg;
     window.location.hash = page + (arg ? "/" + arg : "");
+  }
+
+  function fetchJson(url) {
+    return fetch(url).then(r => {
+      if (!r.ok) throw new Error('Non 2xx status code: ' + r.status);
+      return r.json();
+    });
   }
 
   const PageProposals = {
@@ -710,58 +718,95 @@
 
   const PageTreasury = {
     oninit: async function () {
-      this.tokens = [
-        {
-          id: "eth",
-          chain: "eth",
-          name: "ETH",
+      this.swapFromAsset = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+      this.swapToAsset = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+      this.swapAmount = '';
+      this.tokens = [{
+          address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+          name: "Ethereum",
           symbol: "ETH",
-          display_symbol: null,
-          optimized_symbol: "ETH",
           decimals: 18,
-          logo_url:
-            "https://static.debank.com/image/token/logo_url/eth/935ae4e4d1d12d59a99717a24f2540b5.png",
-          price: 2158.73,
-          is_verified: true,
-          is_core: true,
-          is_wallet: true,
-          time_at: 1483200000,
-          amount: 0.40433976773323665,
-        },
-        {
-          id: "0x6b175474e89094c44da98b954eedeac495271d0f",
-          chain: "eth",
-          name: "Dai Stablecoin",
+          logo: "https://static.debank.com/image/token/logo_url/eth/935ae4e4d1d12d59a99717a24f2540b5.png",
+          price: 0,
+          amount: 0,
+        }, {
+          address: "0x6b175474e89094c44da98b954eedeac495271d0f",
+          name: "DAI",
           symbol: "DAI",
-          display_symbol: null,
-          optimized_symbol: "DAI",
           decimals: 18,
-          logo_url:
-            "https://static.debank.com/image/token/logo_url/0x6b175474e89094c44da98b954eedeac495271d0f/549c4205dbb199f1b8b03af783f35e71.png",
+          logo: "https://static.debank.com/image/token/logo_url/0x6b175474e89094c44da98b954eedeac495271d0f/549c4205dbb199f1b8b03af783f35e71.png",
           price: 1,
-          is_verified: true,
-          is_core: true,
-          is_wallet: true,
-          time_at: 1573672677,
-          amount: 0.05209338,
+          amount: 0,
+          aaveAddress: '0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9',
+          aaveAmount: 0,
+        }, {
+          address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          name: "USDC",
+          symbol: "USDC",
+          decimals: 6,
+          logo: "https://static.debank.com/image/token/logo_url/0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48/adee072b10b0db7c5bd7a28dd4fbe96f.png",
+          price: 1,
+          amount: 0,
+          aaveAddress: '0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9',
+          aaveAmount: 0,
+        }, {
+          address: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+          name: "USDT",
+          symbol: "USDT",
+          decimals: 6,
+          logo: "https://static.debank.com/image/token/logo_url/0xdac17f958d2ee523a2206206994597c13d831ec7/66eadee7b7bb16b75e02b570ab8d5c01.png",
+          price: 1,
+          amount: 0,
+          aaveAddress: '0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9',
+          aaveAmount: 0,
+        }, {
+          address: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+          name: "Uniswap",
+          symbol: "UNI",
+          decimals: 18,
+          logo: "https://static.debank.com/image/project/logo_url/uniswap2/87a541b3b83b041c8d12119e5a0d19f0.png",
+          price: 0,
+          amount: 0,
+        }, {
+          address: "0xD533a949740bb3306d119CC777fa900bA034cd52",
+          name: "Curve",
+          symbol: "CRV",
+          decimals: 18,
+          logo: "https://static.debank.com/image/project/logo_url/curve/aa991be165e771cff87ae61e2a61ef68.png",
+          price: 0,
+          amount: 0,
+        }, {
+          address: "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2",
+          name: "SushiSwap",
+          symbol: "SUSHI",
+          decimals: 18,
+          logo: "https://static.debank.com/image/project/logo_url/sushiswap/248a91277aac1ac16a457b8f61957089.png",
+          price: 0,
+          amount: 0,
         },
       ];
-
-      this.usdValue = (
-        await fetch(
-          "https://openapi.debank.com/v1/user/chain_balance?chain_id=eth&id=" +
-            daoContract.address
-        ).then((r) => r.json())
-      ).usd_value;
+      this.usdValue = 0;
       m.redraw();
+      this.fetchBalances();
+    },
 
-      // id,name,symbol,decimals,logo_url,price,amount
-      /*
-      this.tokens = await fetch(
-        "https://openapi.debank.com/v1/user/token_list?chain_id=eth&is_all=true&id=" +
-          daoContract.address
-      ).then((r) => r.json()).sort((a, b) => (a.amount*a.price - b.amount-a.price));
-      */
+    fetchBalances: async function() {
+      const f = n => parseFloat(ethers.utils.formatUnits(n));
+      for (const token of this.tokens) {
+        try {
+          if (token.address === '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE') {
+            token.amount = f(await provider.getBalance(daoContract.address));
+          } else {
+            const Token = new ethers.Contract(token.address, erc20Abi, provider);
+            token.amount = f(await Token.balanceOf(daoContract.address));
+          }
+          const quote = await fetchJson(`https://api.1inch.exchange/v3.0/${chainId}/quote?amount=1000000000000000000&toTokenAddress=0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48&fromTokenAddress=${token.address}`);
+          token.price = f(ethers.BigNumber.from(quote.toTokenAmount));
+        } catch (err) {
+          console.error(token, err);
+        } 
+      }
+      this.usdValue = this.tokens.reduce((total, t) => total + (t.amount * t.price), 0);
       m.redraw();
     },
 
@@ -774,7 +819,7 @@
         const amount = ethers.utils.parseUnits(amountText, decimals);
 
         let transferAction;
-        if (tokenAddress == "eth") {
+        if (tokenAddress == "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE") {
           transferAction = ethers.utils.defaultAbiCoder.encode(
             ["address", "uint", "bytes"],
             [target, amount, "0x"]
@@ -816,6 +861,152 @@
       }
     },
 
+    handleDeposit: async function (token) {
+      try {
+        const amountText = prompt("Amount to deposit:");
+        if (!amountText) return;
+        const amount = ethers.utils.parseUnits(amountText, token.decimals);
+
+        const approveActionData = new ethers.utils.Interface(
+          erc20Abi
+        ).encodeFunctionData("approve", [token.aaveAddress, amount]);
+        const approveAction = ethers.utils.defaultAbiCoder.encode(
+          ["address", "uint", "bytes"],
+          [token.address, "0", approveActionData]
+        );
+        const actionData = new ethers.utils.Interface(
+          ['function deposit(address, uint256, address, uint16)']
+        ).encodeFunctionData("deposit", [token.address, amount, daoContract.address, 0]);
+        const action = ethers.utils.defaultAbiCoder.encode(
+          ["address", "uint", "bytes"],
+          [token.aaveAddress, "0", actionData]
+        );
+        
+        const votingTime = await daoContract.minVotingTime();
+        const executionDelay = await daoContract.minExecutionDelay();
+        const title = `Deposit ${ethers.utils.formatUnits(amount, token.decimals)} ${token.symbol} into AAVE`;
+        await (
+          await daoContract
+            .connect(await getSigner())
+            .propose(
+              title,
+              title,
+              votingTime,
+              executionDelay,
+              ["Deposit", "Do Not Deposit"],
+              [[approveAction, action], []]
+            )
+        ).wait();
+        const proposalId = (await daoContract.proposalsCount()).toNumber() - 1;
+        navigate("proposal", proposalId);
+        m.redraw();
+      } catch (err) {
+        console.log(err);
+        alert("Error: " + err.message);
+      }
+    },
+
+    handleWithdraw: async function (token) {
+      try {
+        const amountText = prompt("Amount to withdraw:");
+        if (!amountText) return;
+        const amount = ethers.utils.parseUnits(amountText, token.decimals);
+
+        const actionData = new ethers.utils.Interface(
+          ['function withdraw(address, uint256, address)']
+        ).encodeFunctionData("deposit", [token.address, amount, daoContract.address]);
+        const action = ethers.utils.defaultAbiCoder.encode(
+          ["address", "uint", "bytes"],
+          [token.aaveAddress, "0", actionData]
+        );
+        
+        const votingTime = await daoContract.minVotingTime();
+        const executionDelay = await daoContract.minExecutionDelay();
+        const title = `Withdraw ${ethers.utils.formatUnits(amount, token.decimals)} ${token.symbol} from AAVE`;
+        await (
+          await daoContract
+            .connect(await getSigner())
+            .propose(
+              title,
+              title,
+              votingTime,
+              executionDelay,
+              ["Withdraw", "Do Not Withdraw"],
+              [[action], []]
+            )
+        ).wait();
+        const proposalId = (await daoContract.proposalsCount()).toNumber() - 1;
+        navigate("proposal", proposalId);
+        m.redraw();
+      } catch (err) {
+        console.log(err);
+        alert("Error: " + err.message);
+      }
+    },
+
+    handleSwap: async function(e) {
+      try {
+        e.preventDefault();
+        const tokenFrom = this.tokens.find(t => t.address === this.swapFromAsset);
+        const tokenTo = this.tokens.find(t => t.address === this.swapToAsset);
+        const amount = ethers.utils.parseUnits(this.swapAmount, tokenFrom.decimals);
+
+        let approveAction;
+        if (tokenFrom !== '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE') {
+          const approveResponse = await fetchJson(`https://api.1inch.exchange/v3.0/${chainId}/approve/calldata?tokenAddress=${tokenFrom.address}&amount=${amount.toString()}`);
+          approveAction = ethers.utils.defaultAbiCoder.encode(
+            ["address", "uint", "bytes"],
+            [approveResponse.to, "0", approveResponse.data]
+          );
+        }
+
+        const swapResponse = await fetch(`https://api.1inch.exchange/v3.0/${chainId}/approve/calldata?fromTokenAddress=${tokenFrom.address}&toTokenAddress=${tokenTo.address}&amount=${amount.toString()}&fromAddress=${daoContract.address}&slippage=1`);
+        const swapAction = ethers.utils.defaultAbiCoder.encode(
+          ["address", "uint", "bytes"],
+          [swapResponse.tx.to, swapResponse.tx.value, swapResponse.tx.data]
+        );
+        
+        const votingTime = await daoContract.minVotingTime();
+        const executionDelay = await daoContract.minExecutionDelay();
+        const title = `Swap ${ethers.utils.formatUnits(amount, tokenFrom.decimals)} ${tokenFrom.symbol} to ${tokenTo.symbol}`;
+        await (
+          await daoContract
+            .connect(await getSigner())
+            .propose(
+              title,
+              title,
+              votingTime,
+              executionDelay,
+              ["Swap", "Do Not Swap"],
+              [approveAction ? [approveAction, swapAction] : [swapAction], []]
+            )
+        ).wait();
+        const proposalId = (await daoContract.proposalsCount()).toNumber() - 1;
+        navigate("proposal", proposalId);
+        m.redraw();
+      } catch (err) {
+        console.log(err);
+        alert("Error: " + err.message);
+      }
+    },
+
+    renderTokenName: function(t, showPrice = true) {
+      return m("div", { style: "flex: 1;display: flex;align-items: center;" }, [
+        m("img", {
+          src:
+            t.logo ||
+            "https://etherscan.io/images/main/empty-token.png",
+          style: "width: 24px;height: 24px;margin-right: 8px;",
+        }),
+        m(
+          "b",
+          { style: "margin-right: 8px;" },
+          `${t.name} ${t.symbol !== t.name ? `(${t.symbol})` : ''}`
+        ),
+        showPrice ? t.amount.toFixed(4) : null,
+      ]);
+    },
+
     view: function () {
       if (typeof this.usdValue === "undefined") {
         return m("div.ra-loading-inline", {}, "Loading...");
@@ -833,20 +1024,7 @@
         m("h3", { style: "margin-bottom: 8px;" }, "Assets"),
         this.tokens.map((t) =>
           m("div.ra-box", { style: "display: flex;margin-bottom: 8px;" }, [
-            m("div", { style: "flex: 1;display: flex;align-items: center;" }, [
-              m("img", {
-                src:
-                  t.logo_url ||
-                  "https://etherscan.io/images/main/empty-token.png",
-                style: "width: 24px;height: 24px;margin-right: 8px;",
-              }),
-              m(
-                "b",
-                { style: "margin-right: 8px;" },
-                `${t.name} (${t.symbol})`
-              ),
-              t.amount.toFixed(4),
-            ]),
+            this.renderTokenName(t),
             m("div", {}, [
               "$ " + (t.amount * t.price).toFixed(2),
               m(
@@ -856,7 +1034,7 @@
                   onclick: this.handleTransfer.bind(
                     this,
                     t.symbol,
-                    t.id,
+                    t.address,
                     t.decimals
                   ),
                 },
@@ -865,6 +1043,62 @@
             ]),
           ])
         ),
+
+        m("h3", { style: "margin: 48px 0 8px;" }, "Lend (using Aave)"),
+        this.tokens.filter(t => t.aaveAddress).map((t) =>
+          m("div.ra-box", { style: "display: flex;margin-bottom: 8px;" }, [
+            this.renderTokenName(t),
+            m("div", {}, [
+              (t.aaveAmount * t.price).toFixed(2) + ' %',
+              m(
+                "button.ra-button",
+                {
+                  style: "padding: 4px 8px;margin-left: 8px;",
+                  onclick: this.handleDeposit.bind(this, t),
+                },
+                "Deposit"
+              ),
+              m(
+                "button.ra-button",
+                {
+                  style: "padding: 4px 8px;margin-left: 8px;",
+                  onclick: this.handleWithdraw.bind(this, t),
+                },
+                "Withdraw"
+              ),
+            ])
+          ])
+        ),
+
+        m("h3", { style: "margin: 48px 0 8px;" }, "Swap (using 1inch)"),
+        m('div.ra-twocol-even', {style: 'margin-bottom: 16px;'}, [
+          m('div', {}, [
+            m('label', {}, 'From'),
+            m('select.ra-input', {
+              style: 'display:block;width:100%;margin-bottom:8px;',
+              onchange: e => this.swapFromAsset = e.target.value
+            }, this.tokens.map(t =>
+              m('option', {value: t.address, selected: this.swapFromAsset === t.address}, t.name + (t.symbol !== t.name ? ` (${t.symbol})` : '') + ' (' + t.amount.toFixed(3) + ')')
+            )),
+            m('label', {}, 'Amount'),
+            m('input.ra-input', {
+              style: 'display:block;width:100%',
+              value: this.swapAmount,
+              onchange: e => this.swapAmount = e.target.value,
+            })
+          ]),
+          m('div', {}, [
+            m('label', {}, 'To'),
+            m('select.ra-input', {
+              style: 'display:block;width:100%;margin-bottom:8px;',
+              onchange: e => this.swapToAsset = e.target.value
+            }, this.tokens.map(t =>
+              m('option', {value: t.address, selected: this.swapToAsset === t.address}, t.name + (t.symbol !== t.name ? ` (${t.symbol})` : '') + ' (' + t.amount.toFixed(3) + ')')
+            )),
+            m('label', {}, m.trust('&nbsp;')),
+            m('button.ra-button', {style: 'display:block;width:100%', onclick: this.handleSwap.bind(this)}, 'Propose Swap'),
+          ])
+        ]),
       ]);
     },
   };
