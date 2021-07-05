@@ -12,8 +12,12 @@ module.exports = {
   },
   networks: {
     ropsten: {
-      url: "https://ropsten.infura.io/v3/f0039abafaab4ecf9b573383a5eba292",
+      url: "https://ropsten.infura.io/v3/" + process.env.INFURA_PROJECT_ID
       accounts: [process.env.RADAO_ROPSTEN_KEY]
+    },
+    mainnet: {
+      url: "https://mainnet.infura.io/v3/" + process.env.INFURA_PROJECT_ID
+      accounts: [process.env.RADAO_MAINNET_KEY]
     },
   },
   etherscan: {
