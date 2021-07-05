@@ -331,7 +331,7 @@
           m(
             "a.ra-proposal-tile",
             {
-              onclick: () => navigate("proposal", p[0].toNumber()),
+              onclick: () => navigate("proposal", p[0].toString()),
             },
             [
               m("span", {}, "#" + (p[0].toNumber() + 1)),
@@ -391,7 +391,7 @@
     handleExecute: async function () {
       try {
         const signer = await getSigner();
-        const tx = await daoContract.connect(signer).execute(state.pageArg);
+        const tx = await daoContract.connect(signer).execute(state.pageArg, { gasLimit: 2000000 });
         await tx.wait();
         this.load();
       } catch (err) {
