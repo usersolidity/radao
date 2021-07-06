@@ -790,7 +790,7 @@
     },
 
     fetchBalances: async function() {
-      const f = n => parseFloat(ethers.utils.formatUnits(n));
+      const f = n => parseFloat(ethers.utils.formatUnits(n, 6));
       for (const token of this.tokens) {
         try {
           if (token.address === '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE') {
