@@ -12,11 +12,11 @@ module.exports = {
   },
   networks: {
     ropsten: {
-      url: "https://ropsten.infura.io/v3/" + process.env.INFURA_PROJECT_ID
+      url: "https://ropsten.infura.io/v3/" + process.env.INFURA_PROJECT_ID,
       accounts: [process.env.RADAO_ROPSTEN_KEY]
     },
     mainnet: {
-      url: "https://mainnet.infura.io/v3/" + process.env.INFURA_PROJECT_ID
+      url: "https://mainnet.infura.io/v3/" + process.env.INFURA_PROJECT_ID,
       accounts: [process.env.RADAO_MAINNET_KEY]
     },
   },

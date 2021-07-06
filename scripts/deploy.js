@@ -5,12 +5,14 @@ async function main() {
   console.log("contract size", Contract.bytecode.length / 2);
   const contract = await Contract.deploy();
   await contract.deployed();
+  console.log("RaDAO master template deployed to:", contract.address);
 
   const Factory = await hre.ethers.getContractFactory("RaDAOFactory");
   const factory = await Factory.deploy(contract.address);
   await factory.deployed();
   console.log("RaDAOFactory deployed to:", factory.address);
 
+  /*
   const tx = await (
     await factory.create(
       "Z Voting Token",
@@ -25,6 +27,7 @@ async function main() {
   const daoAddress = tx.events[tx.events.length - 1].args[0];
 
   console.log("RaDAO deployed to:", daoAddress);
+  */
 }
 
 main()
