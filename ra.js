@@ -799,12 +799,14 @@
             const Token = new ethers.Contract(token.address, erc20Abi, provider);
             token.amount = f(await Token.balanceOf(daoContract.address), token.decimals);
           }
+          m.redraw();
           if (token.address === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48') {
             token.price = 1;
             continue;
           }
           const quote = await fetchJson(`https://api.1inch.exchange/v3.0/${chainId}/quote?amount=1000000000000000000&toTokenAddress=0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48&fromTokenAddress=${token.address}`);
-          token.price = f(ethers.utils.parseUnits(quote.toTokenAmount, 6), 6);
+          token.price = f(ethers.utils.parseUnits(quote.toTokenAmount, 0), 6);
+          m.redraw();
         } catch (err) {
           console.error(token, err);
         } 
