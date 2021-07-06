@@ -42,7 +42,12 @@
   <script src="https://cdn.ethers.io/lib/ethers-5.2.umd.min.js"></script>
   <script src="ra.js"></script>
   <script>
-    const daoFactoryAddress = '0xcED5Dd3312F415CA0b0457481F0C260db3BD89ad';
+    const daoFactoryAddress = window?.ethereum?.chainId === '0x3' ? '0x8aae4e41389a5d4af10d14b6c8a50834fd949079' : '0xcED5Dd3312F415CA0b0457481F0C260db3BD89ad';
+    
+    const networkNames = {
+      '0x1': 'Mainnet',
+      '0x3': 'Ropsten',
+    };
 
     function setupDao(address) {
       setupRa(app, {
@@ -115,8 +120,8 @@
           m('button.button', {onclick: onVisitDao}, 'Visit'),
           m('h3', {style: 'margin-top: 32px;'}, 'Create new DAO'),
           m('button.button', {onclick: onCreateDao}, 'Create'),
-          m('p', {}, 'Only deployed on Ropsten at the moment'),
-          m('p', {}, 'Factory address: 0x8aae4e41389a5d4af10d14b6c8a50834fd949079'),
+          m('p', {}, 'Network: ' + (networkNames[window?.ethereum?.chainId] || 'Unknown')),
+          m('p', {}, 'Factory address: ' + daoFactoryAddress),
         ]);
       },
     };
